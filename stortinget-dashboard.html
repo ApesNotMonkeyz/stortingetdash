@@ -1080,25 +1080,25 @@ function SakerVisning({ sesjonId, jumpTil }) {
 // ═══════════════════════════════════════════════════════════════
 
 // Profilbilde med fallback til initialer
-function RepFoto({ personId, navn, stor }) {
+function RepFoto({ personId, navn, stor, profil }) {
   const [feil, setFeil] = useState(false);
   const initialer = navn
     ? navn.split(' ').map(n => n[0]).filter(Boolean).slice(0, 2).join('')
     : '?';
-  const partiId = ''; // ikke tilgjengelig her — sendes fra parent om ønsket
 
   if (feil) {
     return (
-      <div className={`rounded-full bg-gray-200 flex items-center justify-center font-semibold text-gray-500 shrink-0
-        ${stor ? 'w-20 h-20 text-2xl' : 'w-9 h-9 text-sm'}`}>
+      <div className={`bg-gray-200 flex items-center justify-center font-semibold text-gray-500 shrink-0
+        ${profil ? 'w-24 h-32 rounded-xl text-3xl' : stor ? 'w-20 h-20 rounded-full text-2xl' : 'w-9 h-9 rounded-full text-sm'}`}>
         {initialer}
       </div>
     );
   }
   return (
-    <img src={fotoUrl(personId, stor ? 'stor' : 'lite')}
+    <img src={fotoUrl(personId, (profil || stor) ? 'stor' : 'lite')}
       alt={navn} onError={() => setFeil(true)}
-      className={`rounded-full object-cover object-top shrink-0 ${stor ? 'w-20 h-20' : 'w-9 h-9'}`} />
+      className={`object-cover object-top shrink-0
+        ${profil ? 'w-24 h-32 rounded-xl' : stor ? 'w-20 h-20 rounded-full' : 'w-9 h-9 rounded-full'}`} />
   );
 }
 
@@ -1177,6 +1177,98 @@ function AktivitetsGauge({ verdi, maks, label, farge }) {
         <text x="32" y="37" textAnchor="middle" fontSize="13" fontWeight="700" fill={farge}>{verdi}</text>
       </svg>
       <span className="text-[11px] text-gray-500 mt-0.5 text-center leading-tight">{label}</span>
+    </div>
+  );
+}
+
+// ── Interaktivt donutdiagram for tematisk profil ─────────────
+const SIRKEL_FARGER = ['#3b82f6','#10b981','#f59e0b','#ef4444',
+  '#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#14b8a6','#64748b','#a78bfa'];
+
+function TematiskProfilSirkel({ temaer }) {
+  const [hover, setHover] = useState(null);
+  const total = temaer.reduce((s, [, c]) => s + c, 0);
+  const CX = 80, CY = 80, R = 68, RI = 42;
+
+  let angle = -Math.PI / 2;
+  const slices = temaer.map(([navn, count], i) => {
+    const pct   = count / total;
+    const start = angle;
+    const end   = angle + pct * 2 * Math.PI;
+    angle = end;
+    const x1o = CX + R  * Math.cos(start), y1o = CY + R  * Math.sin(start);
+    const x2o = CX + R  * Math.cos(end),   y2o = CY + R  * Math.sin(end);
+    const x1i = CX + RI * Math.cos(start), y1i = CY + RI * Math.sin(start);
+    const x2i = CX + RI * Math.cos(end),   y2i = CY + RI * Math.sin(end);
+    const large = pct > 0.5 ? 1 : 0;
+    const d = `M${x1o},${y1o} A${R},${R} 0 ${large} 1 ${x2o},${y2o} L${x2i},${y2i} A${RI},${RI} 0 ${large} 0 ${x1i},${y1i} Z`;
+    return { navn, count, pct, d, farge: SIRKEL_FARGER[i % SIRKEL_FARGER.length] };
+  });
+
+  const hoverSlice = hover !== null ? slices[hover] : null;
+
+  return (
+    <div className="flex gap-3 items-start">
+      {/* SVG donut */}
+      <svg width="160" height="160" viewBox="0 0 160 160" className="shrink-0">
+        {slices.map((s, i) => (
+          <path key={i} d={s.d} fill={s.farge}
+            style={{
+              opacity: hover === null ? 1 : hover === i ? 1 : 0.35,
+              transform: hover === i ? `scale(1.04)` : 'scale(1)',
+              transformOrigin: `${CX}px ${CY}px`,
+              transition: 'opacity 0.15s, transform 0.15s',
+              cursor: 'pointer',
+            }}
+            onMouseEnter={() => setHover(i)}
+            onMouseLeave={() => setHover(null)}
+          />
+        ))}
+        {/* Senter-tekst */}
+        {hoverSlice ? (
+          <>
+            <text x={CX} y={CY - 8} textAnchor="middle" fontSize="10" fontWeight="600" fill="#1f2937"
+              style={{ pointerEvents: 'none' }}>
+              {hoverSlice.navn.length > 14 ? hoverSlice.navn.slice(0, 13) + '…' : hoverSlice.navn}
+            </text>
+            <text x={CX} y={CY + 6} textAnchor="middle" fontSize="9" fill="#6b7280"
+              style={{ pointerEvents: 'none' }}>
+              {hoverSlice.count} saker
+            </text>
+            <text x={CX} y={CY + 18} textAnchor="middle" fontSize="9" fill="#9ca3af"
+              style={{ pointerEvents: 'none' }}>
+              {Math.round(hoverSlice.pct * 100)}%
+            </text>
+          </>
+        ) : (
+          <>
+            <text x={CX} y={CY - 4} textAnchor="middle" fontSize="18" fontWeight="700" fill="#1f2937"
+              style={{ pointerEvents: 'none' }}>
+              {total}
+            </text>
+            <text x={CX} y={CY + 12} textAnchor="middle" fontSize="9" fill="#9ca3af"
+              style={{ pointerEvents: 'none' }}>
+              saker totalt
+            </text>
+          </>
+        )}
+      </svg>
+      {/* Legend */}
+      <div className="flex-1 min-w-0 space-y-1 pt-1">
+        {slices.slice(0, 10).map((s, i) => (
+          <div key={i} className="flex items-center gap-1.5 cursor-default"
+            onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+            style={{ opacity: hover === null ? 1 : hover === i ? 1 : 0.45, transition: 'opacity 0.15s' }}>
+            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: s.farge }} />
+            <span className="text-[10px] text-gray-700 truncate flex-1 leading-tight" title={s.navn}>{s.navn}</span>
+            <span className="text-[10px] text-gray-400 shrink-0">{s.count}</span>
+            <span className="text-[10px] text-gray-300 shrink-0 w-6 text-right">{Math.round(s.pct * 100)}%</span>
+          </div>
+        ))}
+        {slices.length > 10 && (
+          <p className="text-[10px] text-gray-400 pl-3.5">+ {slices.length - 10} temaer til</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -1278,20 +1370,7 @@ function RepOversiktFane({ rep, sesjonId }) {
       {!sakerLoad && temaer.length > 0 && (
         <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Tematisk profil</p>
-          <div className="space-y-1.5">
-            {temaer.map(([navn, n]) => {
-              const w = Math.round(n / maksTema * 100);
-              return (
-                <div key={navn} className="flex items-center gap-2">
-                  <span className="text-xs text-gray-700 w-36 shrink-0 truncate" title={navn}>{navn}</span>
-                  <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full rounded-full transition-all" style={{ width: `${w}%`, background: partiF }} />
-                  </div>
-                  <span className="text-[10px] text-gray-400 w-4 text-right shrink-0">{n}</span>
-                </div>
-              );
-            })}
-          </div>
+          <TematiskProfilSirkel temaer={temaer} />
         </div>
       )}
       {!sakerLoad && temaer.length === 0 && antForslag + antSaksord === 0 && (
@@ -1434,6 +1513,7 @@ function RepLojalitetFane({ rep, sesjonId }) {
   const [kjører, setKjører]       = useState(false);
   const [feil, setFeil]           = useState(null);
   const [progress, setProgress]   = useState({ tekst: '', pst: 0 });
+  const analyseVersjon             = React.useRef(0);
   const partiId = rep.parti?.id;
 
   // Nullstill ved representantbytte
@@ -1441,13 +1521,15 @@ function RepLojalitetFane({ rep, sesjonId }) {
 
   const kjørAnalyse = async () => {
     if (!sesjonId || !partiId) return;
+    const versjon = ++analyseVersjon.current;
     setKjører(true); setFeil(null); setProgress({ tekst: 'Henter saker…', pst: 5 });
     try {
       // 1. Hent saker for sesjonen (trolig allerede cachet)
       const sakerData = await API.saker(sesjonId);
+      if (analyseVersjon.current !== versjon) return;
       const alleSaker = parse.saker(sakerData);
       // Velg lovsaker (1) og budsjettsaker (2) — disse har oftest voteringer
-      const utvalg = alleSaker.filter(s => s.type === 1 || s.type === 2).slice(0, 25);
+      const utvalg = alleSaker.filter(s => s.type === 1 || s.type === 2).slice(0, 8);
 
       setProgress({ tekst: `Henter voteringer for ${utvalg.length} saker…`, pst: 15 });
 
@@ -1455,10 +1537,11 @@ function RepLojalitetFane({ rep, sesjonId }) {
       const voteringsLister = await Promise.all(
         utvalg.map(s => API.voteringer(s.id).catch(() => null))
       );
+      if (analyseVersjon.current !== versjon) return;
 
       const alleVoteringer = voteringsLister
         .flatMap(d => parse.voteringer(d))
-        .slice(0, 50); // maks 50 individuelle voteringer
+        .slice(0, 20); // maks 20 individuelle voteringer
 
       setProgress({ tekst: `Analyserer ${alleVoteringer.length} voteringer…`, pst: 30 });
 
@@ -1522,6 +1605,7 @@ function RepLojalitetFane({ rep, sesjonId }) {
         .sort((a, b) => b.pst - a.pst)
         .slice(0, 8);
 
+      if (analyseVersjon.current !== versjon) return;
       setAnalyse({
         antVoteringer: talt,
         antFravær,
@@ -1534,9 +1618,9 @@ function RepLojalitetFane({ rep, sesjonId }) {
         analyserteVoteringer: alleVoteringer.length,
       });
     } catch (e) {
-      setFeil(e.message);
+      if (analyseVersjon.current === versjon) setFeil(e.message);
     } finally {
-      setKjører(false);
+      if (analyseVersjon.current === versjon) setKjører(false);
     }
   };
 
@@ -1562,6 +1646,8 @@ function RepLojalitetFane({ rep, sesjonId }) {
   );
 
   if (feil) return <FeilMelding feil={feil} />;
+
+  if (!analyse) return <div className="p-6 flex justify-center"><Spinner /></div>;
 
   const { antVoteringer, antFravær, fraværPst, lojalitetPst, antMedParti, antMotParti, avvik, analyserteVoteringer } = analyse;
   const fraværFarge = fraværPst > 15 ? '#ef4444' : fraværPst > 8 ? '#f59e0b' : '#10b981';
@@ -1807,7 +1893,7 @@ function RepProfil({ rep, sesjonId, onLukk }) {
       {/* Header */}
       <div className="px-5 pt-4 pb-3 border-b border-gray-100" style={{ borderTop: `3px solid ${partiF}` }}>
         <div className="flex items-start gap-4">
-          <RepFoto personId={rep.id} navn={navn} stor />
+          <RepFoto personId={rep.id} navn={navn} profil />
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2">
               <div>
