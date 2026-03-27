@@ -916,8 +916,9 @@ function SakKort({ sak, valgt, onClick, matchendeEmner }) {
   );
 }
 
-function SakerVisning({ sesjonId }) {
+function SakerVisning({ sesjonId, jumpTil }) {
   const [valgtSakId, setValgtSakId] = useState(null);
+  useEffect(() => { if (jumpTil?.id) setValgtSakId(jumpTil.id); }, [jumpTil]);
   const [søk,          setSøk]          = useState('');
   const [statusFilter, setStatusFilter] = useState('alle');
   const [typeFilter,   setTypeFilter]   = useState('alle');
@@ -2911,11 +2912,19 @@ function useSporsmal(type, sesjonId) {
 }
 
 // Hoved-view for spørsmål
-function SporsmalVisning({ sesjonId }) {
+function SporsmalVisning({ sesjonId, jumpTil }) {
   const [typeFilter,  setTypeFilter]  = useState('skriftlige');
   const [partiFilter, setPartiFilter] = useState('alle');
   const [søk,         setSøk]         = useState('');
   const [valgt,       setValgt]       = useState(null);
+
+  // Hopp direkte til et spørsmål (f.eks. fra tema-hub)
+  useEffect(() => {
+    if (jumpTil) {
+      setValgt(jumpTil);
+      if (jumpTil.type) setTypeFilter(jumpTil.type);
+    }
+  }, [jumpTil]);
 
   // Last aktiv type + interpellasjoner parallelt om "alle" er valgt
   const { data: skrData,   loading: skrLoad,   error: skrErr   } = useSporsmal('skriftlige',       sesjonId);
@@ -3043,12 +3052,37 @@ const HURTIGTEMAER = [
   'skatt','helse','utdanning','bolig','forsvar','kriminalitet',
 ];
 
-function TemaHubResultat({ resultat, onRepKlikk }) {
-  const { søkTekst, saker, sporsmal, topReps, partier } = resultat;
+// Synonymkart: søk på ett ord treffer alle relaterte termer
+const TEMA_SYNONYMER = {
+  'innvandring':  ['innvandring','integrering','asyl','flyktning','migrasjon','utlending','statsborger','innvandrer'],
+  'klima':        ['klima','miljø','utslipp','co2','bærekraft','fornybar','grønn','klimagass','naturmangfold'],
+  'pensjon':      ['pensjon','alderspensjon','trygd','uføre','pensjonsalder','afp','uføretrygd','aldersgrense'],
+  'beredskap':    ['beredskap','krisehåndtering','sivilforsvaret','nødetat','katastrofe','sivil beredskap','redning'],
+  'skatt':        ['skatt','avgift','skattelette','skatteparadis','formuesskatt','inntektsskatt','skatteinngang','avgiftsøkning'],
+  'helse':        ['helse','sykehus','legemiddel','fastlege','psykisk','kreft','medisin','tannhelse','helseforetak'],
+  'utdanning':    ['utdanning','skole','barnehage','universitet','lærer','studiefinansiering','opplæring','grunnskole','videregående'],
+  'bolig':        ['bolig','husleie','boligpris','leietaker','tomtepris','startlån','boligbygging','eiendom'],
+  'forsvar':      ['forsvar','militær','nato','forsvaret','sikkerhetspolitikk','hær','marine','luftforsvaret','verneplikt'],
+  'kriminalitet': ['kriminalitet','politi','straff','fengsel','vold','narkotika','kriminalomsorgen','lovbrudd','organisert kriminalitet'],
+};
+
+// Utvid ett søkord til alle synonymer (returnerer array)
+const utvidSøk = (q) => {
+  const ql = q.toLowerCase();
+  if (TEMA_SYNONYMER[ql]) return TEMA_SYNONYMER[ql];
+  for (const synonymer of Object.values(TEMA_SYNONYMER)) {
+    if (synonymer.includes(ql)) return synonymer;
+  }
+  return [ql];
+};
+
+function TemaHubResultat({ resultat, onRepKlikk, onSakKlikk, onSporsmalKlikk }) {
+  const { søkTekst, søkTermer = [søkTekst], saker, sporsmal, topReps, partier } = resultat;
   const [visMerSaker,    setVisMerSaker]    = useState(false);
   const [visMerSporsmal, setVisMerSporsmal] = useState(false);
   const maksTotalt = topReps.length > 0 ? Math.max(...topReps.map(r => r.total)) : 1;
   const maksPart   = partier.length  > 0 ? partier[0].total : 1;
+  const ekstraSynonymer = søkTermer.filter(t => t !== søkTekst);
 
   return (
     <div className="max-w-6xl mx-auto px-5 py-5 space-y-5">
@@ -3071,6 +3105,13 @@ function TemaHubResultat({ resultat, onRepKlikk }) {
         ))}
       </div>
 
+      {/* Synonymindikator */}
+      {ekstraSynonymer.length > 0 && (
+        <p className="text-[11px] text-gray-400 -mt-2">
+          Søker også etter: {ekstraSynonymer.join(', ')}
+        </p>
+      )}
+
       {/* Hoved-grid */}
       <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 300px', alignItems: 'start' }}>
 
@@ -3089,24 +3130,34 @@ function TemaHubResultat({ resultat, onRepKlikk }) {
               : <>
                   <div className="divide-y divide-gray-50">
                     {(visMerSaker ? saker : saker.slice(0, 8)).map(s => {
-                      const matchEmner = toArray(s.emne_liste).filter(e => (e.navn||'').toLowerCase().includes(søkTekst));
+                      const matchEmner = toArray(s.emne_liste).filter(e =>
+                        søkTermer.some(t => (e.navn||'').toLowerCase().includes(t))
+                      );
                       return (
-                        <div key={s.id} className="px-4 py-3 hover:bg-gray-50 transition-colors">
-                          <p className="text-sm text-gray-800 leading-snug">{s.korttittel || s.tittel || `Sak #${s.id}`}</p>
-                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                            <StatusBadge status={s.status} />
-                            {s.type && <span className="text-[11px] text-gray-400">{SAK_TYPE_MAP[s.type]||''}</span>}
-                            {s.komite?.navn && <span className="text-[11px] text-gray-400">· {s.komite.navn}</span>}
-                          </div>
-                          {matchEmner.length > 0 && (
-                            <div className="flex gap-1 mt-1.5 flex-wrap">
-                              {matchEmner.map(e => (
-                                <span key={e.id} className={`text-[10px] px-1.5 py-px rounded font-medium ${e.er_hovedemne ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{e.navn}</span>
-                              ))}
+                        <div key={s.id} className="group relative">
+                          <button onClick={() => onSakKlikk && onSakKlikk(s)}
+                            className="w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-sm text-gray-800 leading-snug group-hover:text-blue-900">
+                                {s.korttittel || s.tittel || `Sak #${s.id}`}
+                              </p>
+                              <span className="text-[11px] text-gray-300 group-hover:text-blue-400 shrink-0 mt-0.5">↗</span>
                             </div>
-                          )}
+                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                              <StatusBadge status={s.status} />
+                              {s.type && <span className="text-[11px] text-gray-400">{SAK_TYPE_MAP[s.type]||''}</span>}
+                              {s.komite?.navn && <span className="text-[11px] text-gray-400">· {s.komite.navn}</span>}
+                            </div>
+                            {matchEmner.length > 0 && (
+                              <div className="flex gap-1 mt-1.5 flex-wrap">
+                                {matchEmner.map(e => (
+                                  <span key={e.id} className={`text-[10px] px-1.5 py-px rounded font-medium ${e.er_hovedemne ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{e.navn}</span>
+                                ))}
+                              </div>
+                            )}
+                          </button>
                           {toArray(s.forslagstiller_liste).length > 0 && (
-                            <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                            <div className="flex items-center gap-1 px-4 pb-2 flex-wrap">
                               {toArray(s.forslagstiller_liste).slice(0, 4).map(f => {
                                 const fn = [f.fornavn, f.etternavn].filter(Boolean).join(' ');
                                 return (
@@ -3153,22 +3204,28 @@ function TemaHubResultat({ resultat, onRepKlikk }) {
                       const statusInfo = SPORSMAL_STATUS[String(sp.status??'').toLowerCase()] || { label: String(sp.status??'–'), farge: 'gray' };
                       const typeLabel  = SPORSMAL_TYPER.find(t => t.id === sp.type)?.label || '';
                       return (
-                        <div key={i} className="px-4 py-3 hover:bg-gray-50 transition-colors">
-                          <p className="text-sm text-gray-800 leading-snug line-clamp-2">{sp.tittel}</p>
-                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                            {sp.fra && (
-                              <button onClick={() => onRepKlikk && onRepKlikk(sp.fra)}
-                                className="flex items-center gap-1 hover:bg-blue-50 rounded px-1 py-0.5">
-                                <RepFoto personId={sp.fra.id} navn={navn} />
-                                <span className="text-xs text-gray-600 hover:text-blue-700">{navn}</span>
-                              </button>
-                            )}
-                            {partiId && <PartiBadge partiId={partiId} partiNavn={sp.fra?.parti?.navn} />}
-                            <Badge farge={statusInfo.farge} liten>{statusInfo.label}</Badge>
-                            {typeLabel && <Badge liten>{typeLabel}</Badge>}
-                            {sp.dato && <span className="text-[11px] text-gray-400">{formatDato(sp.dato)}</span>}
-                          </div>
-                          {sp.til && <p className="text-[11px] text-gray-400 mt-0.5">→ {sp.til}</p>}
+                        <div key={i} className="group">
+                          <button onClick={() => onSporsmalKlikk && onSporsmalKlikk(sp)}
+                            className="w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-sm text-gray-800 leading-snug line-clamp-2 group-hover:text-blue-900">{sp.tittel}</p>
+                              <span className="text-[11px] text-gray-300 group-hover:text-blue-400 shrink-0 mt-0.5">↗</span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                              {sp.fra && (
+                                <span onClick={e => { e.stopPropagation(); onRepKlikk && onRepKlikk(sp.fra); }}
+                                  className="flex items-center gap-1 hover:bg-blue-100 rounded px-1 py-0.5 cursor-pointer">
+                                  <RepFoto personId={sp.fra.id} navn={navn} />
+                                  <span className="text-xs text-gray-600 hover:text-blue-700">{navn}</span>
+                                </span>
+                              )}
+                              {partiId && <PartiBadge partiId={partiId} partiNavn={sp.fra?.parti?.navn} />}
+                              <Badge farge={statusInfo.farge} liten>{statusInfo.label}</Badge>
+                              {typeLabel && <Badge liten>{typeLabel}</Badge>}
+                              {sp.dato && <span className="text-[11px] text-gray-400">{formatDato(sp.dato)}</span>}
+                            </div>
+                            {sp.til && <p className="text-[11px] text-gray-400 mt-0.5">→ {sp.til}</p>}
+                          </button>
                         </div>
                       );
                     })}
@@ -3267,7 +3324,7 @@ function TemaHubResultat({ resultat, onRepKlikk }) {
   );
 }
 
-function TemaHubVisning({ sesjonId, onRepKlikk }) {
+function TemaHubVisning({ sesjonId, onRepKlikk, onSakKlikk, onSporsmalKlikk }) {
   const [søkTekst, setSøkTekst] = useState('');
   const [aktivSøk, setAktivSøk] = useState('');
   const [laster,   setLaster]   = useState(false);
@@ -3292,11 +3349,13 @@ function TemaHubVisning({ sesjonId, onRepKlikk }) {
         API.sporretimeSporsmal(sesjonId),
       ]);
 
+      const søkTermer = utvidSøk(q);
+
       const alleSaker = parse.saker(sakerData);
       const matchendeSaker = alleSaker.filter(s => {
         const tittel = `${s.tittel||''} ${s.korttittel||''}`.toLowerCase();
         const emner  = toArray(s.emne_liste).map(e => (e.navn||'').toLowerCase()).join(' ');
-        return tittel.includes(q) || emner.includes(q);
+        return søkTermer.some(t => tittel.includes(t) || emner.includes(t));
       });
 
       const alleSporsmal = [
@@ -3304,10 +3363,10 @@ function TemaHubVisning({ sesjonId, onRepKlikk }) {
         ...parse.sporsmalListe(intData,  'interpellasjoner'),
         ...parse.sporsmalListe(spørData, 'sporretimen'),
       ];
-      const matchendeSporsmal = alleSporsmal.filter(sp =>
-        (sp.tittel||'').toLowerCase().includes(q) ||
-        (sp.tekst ||'').toLowerCase().includes(q)
-      );
+      const matchendeSporsmal = alleSporsmal.filter(sp => {
+        const tekst = `${sp.tittel||''} ${sp.tekst||''}`.toLowerCase();
+        return søkTermer.some(t => tekst.includes(t));
+      });
 
       const repReg = {};
       const regRep = (rep, felt) => {
@@ -3337,7 +3396,7 @@ function TemaHubVisning({ sesjonId, onRepKlikk }) {
         .map(p => ({ ...p, total: p.saker + p.sporsmal }))
         .sort((a, b) => b.total - a.total);
 
-      setResultat({ søkTekst: q, saker: matchendeSaker, sporsmal: matchendeSporsmal, topReps, partier });
+      setResultat({ søkTekst: q, søkTermer, saker: matchendeSaker, sporsmal: matchendeSporsmal, topReps, partier });
     } catch (e) {
       setFeil(e.message);
     } finally {
@@ -3411,7 +3470,7 @@ function TemaHubVisning({ sesjonId, onRepKlikk }) {
             </div>
           </div>
         )}
-        {!laster && resultat && <TemaHubResultat resultat={resultat} onRepKlikk={onRepKlikk} />}
+        {!laster && resultat && <TemaHubResultat resultat={resultat} onRepKlikk={onRepKlikk} onSakKlikk={onSakKlikk} onSporsmalKlikk={onSporsmalKlikk} />}
       </div>
     </div>
   );
@@ -3432,8 +3491,10 @@ function App() {
   const [view,     setView]     = useState('saker');
   const [sesjonId, setSesjonId] = useState('2025-2026');
 
-  // Representanter-view fra partiview: hopp direkte til en representant
-  const [jumpTilRep, setJumpTilRep] = useState(null);
+  // Jump-state for tverrvisnings-navigasjon
+  const [jumpTilRep,      setJumpTilRep]      = useState(null);
+  const [jumpTilSak,      setJumpTilSak]      = useState(null);
+  const [jumpTilSporsmal, setJumpTilSporsmal] = useState(null);
 
   const { data: sesjonData } = useData(() => API.sesjoner(), []);
   const sesjoner = useMemo(() => parse.sesjoner(sesjonData), [sesjonData]);
@@ -3449,6 +3510,18 @@ function App() {
   const handleVelgRep = (rep) => {
     setJumpTilRep(rep);
     setView('representanter');
+  };
+
+  // Klikk på sak i tema-hub → bytt til saker-view med saken åpen
+  const handleVelgSak = (sak) => {
+    setJumpTilSak(sak);
+    setView('saker');
+  };
+
+  // Klikk på spørsmål i tema-hub → bytt til spørsmål-view med spørsmålet åpent
+  const handleVelgSporsmal = (sp) => {
+    setJumpTilSporsmal(sp);
+    setView('sporsmal');
   };
 
   return (
@@ -3495,13 +3568,13 @@ function App() {
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
         {view === 'saker' && (
           <div className="flex-1 overflow-y-auto min-h-0">
-            <SakerVisning sesjonId={sesjonId} />
+            <SakerVisning sesjonId={sesjonId} jumpTil={jumpTilSak} />
           </div>
         )}
-        {view === 'tema'           && <TemaHubVisning         sesjonId={sesjonId} onRepKlikk={handleVelgRep} />}
+        {view === 'tema'           && <TemaHubVisning         sesjonId={sesjonId} onRepKlikk={handleVelgRep} onSakKlikk={handleVelgSak} onSporsmalKlikk={handleVelgSporsmal} />}
         {view === 'representanter' && <RepresentanterVisning  sesjonId={sesjonId} jumpTil={jumpTilRep} />}
         {view === 'partier'        && <PartierVisning          sesjonId={sesjonId} onVelgRep={handleVelgRep} />}
-        {view === 'sporsmal'       && <SporsmalVisning         sesjonId={sesjonId} />}
+        {view === 'sporsmal'       && <SporsmalVisning         sesjonId={sesjonId} jumpTil={jumpTilSporsmal} />}
       </div>
     </div>
   );
