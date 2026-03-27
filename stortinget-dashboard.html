@@ -2622,82 +2622,96 @@ function PartiUtviklingFane({ parti, sesjonId }) {
 function PartiStemmegivingFane({ parti, sesjonId }) {
   const repIds = useMemo(() => new Set(parti.representanter.map(r => r.id)), [parti]);
   const farge  = PARTI_FARGER[parti.id] || '#6b7280';
-  const [analyse, setAnalyse]   = useState(null);
-  const [kjører,  setKjører]    = useState(false);
-  const [feil,    setFeil]      = useState(null);
+
+  const { data: sesjonData } = useData(() => API.sesjoner(), []);
+  const alleSesjoner = useMemo(() => parse.sesjoner(sesjonData).slice(0, 8), [sesjonData]);
+
+  const [params, setParams] = useState({ sesjoner: [sesjonId], antallSaker: 25, sakstype: 'lovbudsjett' });
+  const [temaFilter, setTemaFilter] = useState('alle');
+  const [analyse,  setAnalyse]  = useState(null);
+  const [kjører,   setKjører]   = useState(false);
+  const [feil,     setFeil]     = useState(null);
   const [progress, setProgress] = useState({ tekst: '', pst: 0 });
 
-  useEffect(() => { setAnalyse(null); setFeil(null); }, [parti.id]);
+  useEffect(() => { setAnalyse(null); setFeil(null); setTemaFilter('alle'); }, [parti.id]);
+  useEffect(() => {
+    setParams(p => ({ ...p, sesjoner: p.sesjoner.includes(sesjonId) ? p.sesjoner : [sesjonId] }));
+  }, [sesjonId]);
+
+  const toggleSesjon = (sId) => setParams(p => {
+    const aktive = p.sesjoner.includes(sId) ? p.sesjoner.filter(s => s !== sId) : [...p.sesjoner, sId];
+    return { ...p, sesjoner: aktive.length ? aktive : [sId] };
+  });
 
   const kjørAnalyse = async () => {
-    if (!sesjonId) return;
+    if (!params.sesjoner.length) return;
     setKjører(true); setFeil(null); setProgress({ tekst: 'Henter saker…', pst: 5 });
     try {
-      const sakerData    = await API.saker(sesjonId);
-      const utvalg       = parse.saker(sakerData).filter(s => s.type === 1 || s.type === 2).slice(0, 20);
-      setProgress({ tekst: `Henter voteringer for ${utvalg.length} saker…`, pst: 15 });
-
-      const voteringsLister = await Promise.all(utvalg.map(s => API.voteringer(s.id).catch(() => null)));
-      const alleVoteringer  = voteringsLister.flatMap(d => parse.voteringer(d)).slice(0, 40);
-      setProgress({ tekst: `Analyserer ${alleVoteringer.length} voteringer…`, pst: 25 });
-
-      if (!alleVoteringer.length) { setAnalyse({ partiAlignment: [], analyserteVoteringer: 0 }); return; }
-
-      let done = 0;
-      const resultater = await Promise.all(
-        alleVoteringer.map(v => {
-          const vid = v.votering_id || v.id;
-          return API.voteringsresultat(vid)
-            .then(d => {
-              done++;
-              setProgress({ tekst: `Votering ${done}/${alleVoteringer.length}…`, pst: 25 + Math.floor(done/alleVoteringer.length*70) });
-              return parse.voteringsresultat(d);
-            })
-            .catch(() => null);
-        })
-      );
-
-      // For hvert votering: beregn partiets posisjon + alle andre partiers posisjon
-      const alignment = {}; // otherPartiId → { navn, felles, like }
-
-      for (let i = 0; i < alleVoteringer.length; i++) {
-        const stemmer = resultater[i];
-        if (!stemmer) continue;
-
-        // Partiets posisjon (flertall av egne repr, eksl. fraværende)
-        const egne    = stemmer.filter(s => repIds.has(s.representant?.id) && s.votering !== 1);
-        if (egne.length < 2) continue;
-        const egneFor = egne.filter(s => s.votering === 2).length;
-        const egeneMot = egne.filter(s => s.votering === 3).length;
-        if (egneFor + egeneMot === 0) continue;
-        const partiPos = egneFor >= egeneMot ? 2 : 3;
-
-        // Andre partier
-        const andreReg = {};
-        stemmer.filter(s => !repIds.has(s.representant?.id) && s.votering !== 1 && s.representant?.parti?.id)
-          .forEach(s => {
-            const pid = s.representant.parti.id;
-            const pn  = s.representant.parti.navn || pid;
-            if (!andreReg[pid]) andreReg[pid] = { navn: pn, for: 0, mot: 0 };
-            if (s.votering === 2) andreReg[pid].for++;
-            else                  andreReg[pid].mot++;
-          });
-
-        Object.entries(andreReg).forEach(([pid, p]) => {
-          if (p.for + p.mot < 2) return;
-          const andresPos = p.for >= p.mot ? 2 : 3;
-          if (!alignment[pid]) alignment[pid] = { navn: p.navn, felles: 0, like: 0 };
-          alignment[pid].felles++;
-          if (andresPos === partiPos) alignment[pid].like++;
-        });
+      // 1. Hent saker for alle valgte sesjoner
+      const alleSakerRaw = [];
+      for (const sId of params.sesjoner) {
+        const sd = await API.saker(sId);
+        parse.saker(sd).forEach(s => alleSakerRaw.push({ ...s, _sesjon: sId }));
       }
 
-      const partiAlignment = Object.entries(alignment)
-        .filter(([, v]) => v.felles >= 5)
-        .map(([id, v]) => ({ id, ...v, pst: Math.round(v.like / v.felles * 100) }))
-        .sort((a, b) => b.pst - a.pst);
+      // 2. Filtrer etter sakstype
+      let filtrerte = alleSakerRaw;
+      if (params.sakstype === 'lovbudsjett') {
+        filtrerte = filtrerte.filter(s => s.type === 1 || s.type === 2);
+      } else if (params.sakstype === 'representant') {
+        filtrerte = filtrerte.filter(s => s.type === 5 || s.type === 6 ||
+          String(s.type_tekstkode || '').toLowerCase().includes('repr'));
+      }
 
-      setAnalyse({ partiAlignment, analyserteVoteringer: alleVoteringer.length });
+      // 3. Ekstraher tilgjengelige temaer
+      const temaFreq = {};
+      filtrerte.forEach(s => toArray(s.emne_liste).forEach(e => {
+        if (e.navn) temaFreq[e.navn] = (temaFreq[e.navn] || 0) + 1;
+      }));
+      const tilgjengeligeTemaer = Object.entries(temaFreq)
+        .sort((a, b) => b[1] - a[1]).slice(0, 30).map(([navn, n]) => ({ navn, n }));
+
+      // 4. Begrens antall saker
+      const maxSaker = params.antallSaker >= 999 ? filtrerte.length : params.antallSaker;
+      const utvalg = filtrerte.slice(0, maxSaker);
+      setProgress({ tekst: `Henter voteringer for ${utvalg.length} saker…`, pst: 15 });
+
+      // 5. Hent voteringer for hver sak
+      const voteringsLister = await Promise.all(utvalg.map(s => API.voteringer(s.id).catch(() => null)));
+      const alleVoteringer  = voteringsLister.flatMap((d, i) =>
+        parse.voteringer(d).map(v => ({ ...v, _sak: utvalg[i] })));
+      setProgress({ tekst: `Henter resultater for ${alleVoteringer.length} voteringer…`, pst: 25 });
+
+      if (!alleVoteringer.length) {
+        setAnalyse({ sakerMedData: [], tilgjengeligeTemaer, sesjoner: params.sesjoner });
+        setTemaFilter('alle');
+        return;
+      }
+
+      // 6. Hent voteringsresultat
+      let done = 0;
+      const stemmeListe = await Promise.all(alleVoteringer.map(v => {
+        const vid = v.votering_id || v.id;
+        return API.voteringsresultat(vid)
+          .then(d => {
+            done++;
+            setProgress({ tekst: `Votering ${done}/${alleVoteringer.length}…`, pst: 25 + Math.floor(done / alleVoteringer.length * 70) });
+            return { v, stemmer: parse.voteringsresultat(d) };
+          })
+          .catch(() => null);
+      }));
+
+      // 7. Grupper per sak
+      const sakMap = new Map();
+      stemmeListe.forEach(item => {
+        if (!item) return;
+        const sakId = item.v._sak?.id;
+        if (!sakMap.has(sakId)) sakMap.set(sakId, { sak: item.v._sak, stemmeData: [] });
+        sakMap.get(sakId).stemmeData.push(item.stemmer);
+      });
+
+      setAnalyse({ sakerMedData: [...sakMap.values()], tilgjengeligeTemaer, sesjoner: [...params.sesjoner] });
+      setTemaFilter('alle');
     } catch (e) {
       setFeil(e.message);
     } finally {
@@ -2705,81 +2719,210 @@ function PartiStemmegivingFane({ parti, sesjonId }) {
     }
   };
 
-  if (!analyse && !kjører && !feil) return (
-    <div className="p-6 flex flex-col items-center gap-4 text-center">
-      <div className="w-12 h-12 rounded-full flex items-center justify-center text-xl" style={{ background: `${farge}18` }}>
-        🗳
-      </div>
+  // Beregn alignment klientsidert — oppdateres umiddelbart ved temaFilter-endring
+  const { partiAlignment, analyserteVoteringer } = useMemo(() => {
+    if (!analyse?.sakerMedData?.length) return { partiAlignment: [], analyserteVoteringer: 0 };
+    const filtrert = temaFilter === 'alle' ? analyse.sakerMedData
+      : analyse.sakerMedData.filter(({ sak }) =>
+          toArray(sak?.emne_liste).some(e => e.navn === temaFilter));
+    const alignment = {};
+    let antVot = 0;
+    filtrert.forEach(({ stemmeData }) => {
+      stemmeData.forEach(stemmer => {
+        if (!stemmer) return;
+        const egne = stemmer.filter(s => repIds.has(s.representant?.id) && s.votering !== 1);
+        if (egne.length < 2) return;
+        const egneFor  = egne.filter(s => s.votering === 2).length;
+        const egeneMot = egne.filter(s => s.votering === 3).length;
+        if (egneFor + egeneMot === 0) return;
+        const partiPos = egneFor >= egeneMot ? 2 : 3;
+        antVot++;
+        const andreReg = {};
+        stemmer.filter(s => !repIds.has(s.representant?.id) && s.votering !== 1 && s.representant?.parti?.id)
+          .forEach(s => {
+            const pid = s.representant.parti.id;
+            if (!andreReg[pid]) andreReg[pid] = { navn: s.representant.parti.navn || pid, for: 0, mot: 0 };
+            if (s.votering === 2) andreReg[pid].for++; else andreReg[pid].mot++;
+          });
+        Object.entries(andreReg).forEach(([pid, p]) => {
+          if (p.for + p.mot < 2) return;
+          const andresPos = p.for >= p.mot ? 2 : 3;
+          if (!alignment[pid]) alignment[pid] = { navn: p.navn, felles: 0, like: 0 };
+          alignment[pid].felles++;
+          if (andresPos === partiPos) alignment[pid].like++;
+        });
+      });
+    });
+    const partiAlignment = Object.entries(alignment)
+      .filter(([, v]) => v.felles >= 3)
+      .map(([id, v]) => ({ id, ...v, pst: Math.round(v.like / v.felles * 100) }))
+      .sort((a, b) => b.pst - a.pst);
+    return { partiAlignment, analyserteVoteringer: antVot };
+  }, [analyse, temaFilter, repIds]);
+
+  // ── Parameter-panel (alltid synlig) ──────────────────────────
+  const paramPanel = (
+    <div className="border-b border-gray-100 p-4 space-y-3 bg-gray-50 shrink-0">
+      {/* Sesjoner */}
       <div>
-        <p className="text-sm font-medium text-gray-700">Kryss-parti stemmeanalyse</p>
-        <p className="text-xs text-gray-400 mt-1">
-          Beregn hvilke partier som oftest stemmer likt som {parti.navn} · {sesjonId}
-        </p>
+        <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Sesjoner</p>
+        <div className="flex flex-wrap gap-1.5">
+          {alleSesjoner.length === 0
+            ? <span className="text-[11px] text-gray-400">Laster…</span>
+            : alleSesjoner.map(s => {
+                const sId = s.id || s;
+                const aktiv = params.sesjoner.includes(sId);
+                return (
+                  <button key={sId} onClick={() => toggleSesjon(sId)}
+                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium border transition-colors ${
+                      aktiv ? 'text-white border-transparent' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-400'
+                    }`}
+                    style={aktiv ? { background: farge } : {}}>
+                    {sId}
+                  </button>
+                );
+              })
+          }
+        </div>
       </div>
-      <button onClick={kjørAnalyse}
-        className="px-5 py-2.5 text-white text-sm font-medium rounded-xl transition-colors"
+
+      {/* Sakstype + Maks saker */}
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Sakstype</p>
+          <select value={params.sakstype}
+            onChange={e => setParams(p => ({ ...p, sakstype: e.target.value }))}
+            className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
+            <option value="alle">Alle typer</option>
+            <option value="lovbudsjett">Lov + budsjett</option>
+            <option value="representant">Representantforslag</option>
+          </select>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Maks saker</p>
+          <select value={params.antallSaker}
+            onChange={e => setParams(p => ({ ...p, antallSaker: Number(e.target.value) }))}
+            className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
+            <option value={10}>10 saker</option>
+            <option value={25}>25 saker</option>
+            <option value={50}>50 saker</option>
+            <option value={100}>100 saker</option>
+            <option value={999}>Alle saker</option>
+          </select>
+        </div>
+      </div>
+
+      <button onClick={kjørAnalyse} disabled={kjører || !params.sesjoner.length}
+        className="w-full py-2 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
         style={{ background: farge }}>
-        Kjør stemmeanalyse
+        {analyse ? 'Oppdater analyse' : 'Kjør stemmeanalyse'}
       </button>
     </div>
   );
 
   if (kjører) return (
-    <div className="p-6 flex flex-col items-center gap-4">
-      <Spinner />
-      <div className="w-full max-w-xs">
-        <div className="flex justify-between text-xs text-gray-400 mb-1">
-          <span>{progress.tekst}</span><span>{progress.pst}%</span>
-        </div>
-        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-          <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${progress.pst}%` }} />
+    <div className="flex flex-col h-full">
+      {paramPanel}
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 p-6">
+        <Spinner />
+        <div className="w-full max-w-xs">
+          <div className="flex justify-between text-xs text-gray-400 mb-1">
+            <span>{progress.tekst}</span><span>{progress.pst}%</span>
+          </div>
+          <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${progress.pst}%` }} />
+          </div>
         </div>
       </div>
     </div>
   );
 
-  if (feil) return <FeilMelding feil={feil} />;
-
-  const { partiAlignment, analyserteVoteringer } = analyse;
+  if (!analyse) return (
+    <div className="flex flex-col h-full">
+      {paramPanel}
+      {feil
+        ? <div className="p-4"><FeilMelding feil={feil} /></div>
+        : <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center text-gray-400">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center text-xl"
+              style={{ background: `${farge}18` }}>🗳</div>
+            <p className="text-xs leading-relaxed">
+              Velg sesjoner og parametere, deretter kjør analysen for å se hvilke partier
+              som oftest stemmer likt som {parti.navn}.
+            </p>
+          </div>
+      }
+    </div>
+  );
 
   return (
-    <div className="p-4 space-y-4">
-      <p className="text-[11px] text-gray-400">Basert på {analyserteVoteringer} voteringer · {sesjonId}</p>
+    <div className="flex flex-col h-full overflow-hidden">
+      {paramPanel}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {feil && <FeilMelding feil={feil} />}
 
-      {partiAlignment.length === 0
-        ? <TomtResultat tekst="Utilstrekkelig data for sammenligning (trenger ≥5 felles voteringer per parti)." />
-        : (
-          <div className="space-y-2.5">
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Partier rangert etter stemme-samsvar med {parti.navn}</p>
-            {partiAlignment.map((p, i) => {
-              const pF    = PARTI_FARGER[p.id] || '#6b7280';
-              const score = p.pst >= 75 ? '#10b981' : p.pst >= 55 ? '#3b82f6' : p.pst >= 40 ? '#f59e0b' : '#ef4444';
-              return (
-                <div key={p.id} className="flex items-center gap-3">
-                  <span className="text-[11px] text-gray-300 w-4 text-right shrink-0">{i+1}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-semibold" style={{ color: pF }}>{p.navn || p.id}</span>
-                      <span className="text-[10px] text-gray-400">{p.felles} voteringer</span>
-                    </div>
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full transition-all" style={{ width: `${p.pst}%`, background: pF }} />
-                    </div>
-                  </div>
-                  <span className="text-sm font-bold w-10 text-right shrink-0" style={{ color: score }}>
-                    {p.pst}%
-                  </span>
-                </div>
-              );
-            })}
+        {/* Tema-filter */}
+        {analyse.tilgjengeligeTemaer?.length > 0 && (
+          <div>
+            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Tema</p>
+            <div className="flex flex-wrap gap-1">
+              <button onClick={() => setTemaFilter('alle')}
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors ${
+                  temaFilter === 'alle' ? 'text-white bg-gray-500 border-gray-500' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-400'
+                }`}>
+                Alle
+              </button>
+              {analyse.tilgjengeligeTemaer.map(t => (
+                <button key={t.navn} onClick={() => setTemaFilter(temaFilter === t.navn ? 'alle' : t.navn)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors ${
+                    temaFilter === t.navn ? 'text-white border-transparent' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-400'
+                  }`}
+                  style={temaFilter === t.navn ? { background: farge } : {}}>
+                  {t.navn} <span className="opacity-60">({t.n})</span>
+                </button>
+              ))}
+            </div>
           </div>
-        )
-      }
+        )}
 
-      <button onClick={() => { setAnalyse(null); setFeil(null); }}
-        className="w-full text-[11px] text-blue-500 hover:text-blue-700 py-1">
-        Kjør ny analyse
-      </button>
+        {/* Metadata */}
+        <p className="text-[11px] text-gray-400">
+          {analyserteVoteringer} voteringer · {analyse.sesjoner.join(', ')}
+          {temaFilter !== 'alle' && <span className="font-medium text-blue-500"> · {temaFilter}</span>}
+        </p>
+
+        {/* Resultater */}
+        {partiAlignment.length === 0
+          ? <TomtResultat tekst="Utilstrekkelig data (trenger ≥3 felles voteringer per parti). Prøv flere saker eller sesjoner." />
+          : (
+            <div className="space-y-2.5">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                Stemme-samsvar med {parti.navn}
+              </p>
+              {partiAlignment.map((p, i) => {
+                const pF    = PARTI_FARGER[p.id] || '#6b7280';
+                const score = p.pst >= 75 ? '#10b981' : p.pst >= 55 ? '#3b82f6' : p.pst >= 40 ? '#f59e0b' : '#ef4444';
+                return (
+                  <div key={p.id} className="flex items-center gap-3">
+                    <span className="text-[11px] text-gray-300 w-4 text-right shrink-0">{i+1}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-semibold" style={{ color: pF }}>{p.navn || p.id}</span>
+                        <span className="text-[10px] text-gray-400">{p.felles} vot.</span>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${p.pst}%`, background: pF }} />
+                      </div>
+                    </div>
+                    <span className="text-sm font-bold w-10 text-right shrink-0" style={{ color: score }}>
+                      {p.pst}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )
+        }
+      </div>
     </div>
   );
 }
