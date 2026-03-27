@@ -232,25 +232,25 @@ function useData(fetchFn, deps) {
 // SEKSJON 4: UI-PRIMITIVER
 // ═══════════════════════════════════════════════════════════════
 const PARTI_FARGER = {
-  'A':   '#e4002b', 'AP': '#e4002b',
+  'A':   '#e4002b', 'AP':  '#e4002b',
   'H':   '#0065bd',
-  'FRP': '#003f7f',
-  'SP':  '#1d6a38',
+  'FRP': '#003f7f', 'FrP': '#003f7f',
+  'SP':  '#1d6a38', 'Sp':  '#1d6a38',
   'SV':  '#b5173f',
   'V':   '#00882e',
-  'KRF': '#d4910a',
+  'KRF': '#d4910a', 'KrF': '#d4910a',
   'MDG': '#35853b',
   'R':   '#c41230',
 };
 
 const PARTI_BG = {
-  'A':   '#fff0f0', 'AP': '#fff0f0',
+  'A':   '#fff0f0', 'AP':  '#fff0f0',
   'H':   '#eff6ff',
-  'FRP': '#eff4ff',
-  'SP':  '#f0fdf4',
+  'FRP': '#eff4ff', 'FrP': '#eff4ff',
+  'SP':  '#f0fdf4', 'Sp':  '#f0fdf4',
   'SV':  '#fff0f2',
   'V':   '#f0fdf4',
-  'KRF': '#fffbeb',
+  'KRF': '#fffbeb', 'KrF': '#fffbeb',
   'MDG': '#f0fdf4',
   'R':   '#fff0f2',
 };
@@ -2093,7 +2093,7 @@ function PartiOversiktFane({ parti, sesjonId, onVelgRep }) {
     partiSaker.forEach(s => toArray(s.emne_liste).forEach(e => {
       if (e.navn) freq[e.navn] = (freq[e.navn] || 0) + 1;
     }));
-    return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 12);
   }, [partiSaker]);
 
   // Intern aktivitetsrangering (preview topp 3)
@@ -2115,40 +2115,45 @@ function PartiOversiktFane({ parti, sesjonId, onVelgRep }) {
       reg[sp.fra.id].spm++;
     });
     return Object.values(reg)
-      .map(r => ({ ...r, total: r.forslag + r.saksord + r.spm }))
+      .map(r => ({ ...r, total: r.forslag + r.spm }))
       .sort((a, b) => b.total - a.total);
   }, [partiSaker, partiSporsmal, repIds, parti.representanter]);
 
   const reps   = parti.representanter.filter(r => !r.vara_representant);
   const varaer = parti.representanter.filter(r => r.vara_representant);
-  const maksTema = temaer[0]?.[1] || 1;
-
   return (
     <div className="p-4 space-y-5">
       {/* Parti-identitet */}
       <div className="rounded-xl overflow-hidden border" style={{ borderColor: `${farge}30` }}>
         <div style={{ background: farge, height: '4px' }} />
         <div className="p-4" style={{ background: bg }}>
-          <div className="grid grid-cols-3 gap-3 text-center">
-            {[
-              { n: reps.length,            lbl: 'Representanter' },
-              { n: varaer.length,          lbl: 'Varaer'         },
-              { n: partiSaker.length,      lbl: 'Saker',         loading: sakerLoad },
-            ].map(({ n, lbl, loading: l }) => (
-              <div key={lbl}>
-                {l ? <Spinner liten /> : <p className="text-xl font-bold" style={{ color: farge }}>{n}</p>}
-                <p className="text-[11px] text-gray-500 mt-0.5">{lbl}</p>
-              </div>
-            ))}
+          {/* Mandater */}
+          <div className="flex items-center justify-around mb-3">
+            <div className="text-center">
+              <p className="text-2xl font-bold" style={{ color: farge }}>{reps.length}</p>
+              <p className="text-[11px] text-gray-500">Representanter</p>
+            </div>
+            <div className="h-8 w-px bg-gray-200" />
+            <div className="text-center">
+              <p className="text-2xl font-bold" style={{ color: farge }}>{varaer.length}</p>
+              <p className="text-[11px] text-gray-500">Varaer</p>
+            </div>
+            <div className="h-8 w-px bg-gray-200" />
+            <div className="text-center">
+              <p className="text-2xl font-bold" style={{ color: farge }}>{reps.length + varaer.length}</p>
+              <p className="text-[11px] text-gray-500">Totalt</p>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 mt-3 text-center">
+          {/* Aktivitetsindikatorer */}
+          <div className="grid grid-cols-3 gap-2 pt-3 border-t text-center" style={{ borderColor: `${farge}20` }}>
             {[
+              { n: partiSaker.length,    lbl: 'Saker',         loading: sakerLoad },
               { n: partiSporsmal.length, lbl: 'Spørsmål stilt' },
               { n: topReps.length,       lbl: 'Aktive repr.'   },
-            ].map(({ n, lbl }) => (
+            ].map(({ n, lbl, loading: l }) => (
               <div key={lbl}>
-                <p className="text-xl font-bold" style={{ color: farge }}>{n}</p>
-                <p className="text-[11px] text-gray-500 mt-0.5">{lbl}</p>
+                {l ? <Spinner liten /> : <p className="text-lg font-bold" style={{ color: farge }}>{n}</p>}
+                <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">{lbl}</p>
               </div>
             ))}
           </div>
@@ -2159,17 +2164,7 @@ function PartiOversiktFane({ parti, sesjonId, onVelgRep }) {
       {temaer.length > 0 && (
         <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Tematisk profil</p>
-          <div className="space-y-1.5">
-            {temaer.map(([navn, n]) => (
-              <div key={navn} className="flex items-center gap-2">
-                <span className="text-xs text-gray-700 w-40 shrink-0 truncate" title={navn}>{navn}</span>
-                <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full" style={{ width: `${Math.round(n / maksTema * 100)}%`, background: farge }} />
-                </div>
-                <span className="text-[10px] text-gray-400 w-4 text-right shrink-0">{n}</span>
-              </div>
-            ))}
-          </div>
+          <TematiskProfilSirkel temaer={temaer} />
         </div>
       )}
       {sakerLoad && <div className="flex justify-center py-2"><Spinner liten /></div>}
@@ -2240,7 +2235,7 @@ function PartiRangeringFane({ parti, sesjonId, onVelgRep }) {
     // Legg til inaktive reps med 0-score
     parti.representanter.forEach(r => { if (!reg[r.id]) reg[r.id] = { rep: r, forslag: 0, saksord: 0, spm: 0 }; });
     return Object.values(reg)
-      .map(r => ({ ...r, total: r.forslag + r.saksord + r.spm }))
+      .map(r => ({ ...r, total: r.forslag + r.spm }))
       .sort((a, b) => b.total - a.total);
   }, [alleSaker, alleSporsmal, repIds, parti.representanter]);
 
@@ -2251,7 +2246,7 @@ function PartiRangeringFane({ parti, sesjonId, onVelgRep }) {
   return (
     <div>
       <p className="text-[11px] text-gray-400 px-4 py-2 border-b border-gray-100">
-        {rangering.length} representanter · rangert etter aktivitet (forslag + saksordførerskap + spørsmål)
+        {rangering.length} representanter · rangert etter forslag + spørsmål
       </p>
       <div className="divide-y divide-gray-50">
         {rangering.map((r, i) => {
@@ -2785,6 +2780,7 @@ function PartiListeSidebar({ gruppert, valgtId, onVelg }) {
           const farge  = PARTI_FARGER[parti.id] || '#6b7280';
           const bg     = PARTI_BG[parti.id]    || '#f9fafb';
           const reps   = parti.representanter.filter(r => !r.vara_representant);
+          const varaer = parti.representanter.filter(r => r.vara_representant);
           const valgt  = valgtId === parti.id;
           return (
             <button key={parti.id} onClick={() => onVelg(parti)}
@@ -2793,14 +2789,16 @@ function PartiListeSidebar({ gruppert, valgtId, onVelg }) {
               }`}>
               <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
                 style={{ background: valgt ? farge : bg, color: valgt ? '#fff' : farge, border: `2px solid ${farge}` }}>
-                {reps.length}
+                {parti.representanter.length}
               </div>
               <div className="flex-1 min-w-0">
                 <p className={`text-sm font-semibold truncate ${valgt ? 'text-blue-900' : 'text-gray-800'}`}
                   style={{ color: valgt ? undefined : farge }}>
                   {parti.navn}
                 </p>
-                <p className="text-[11px] text-gray-400">{reps.length} repr.</p>
+                <p className="text-[11px] text-gray-400">
+                  {reps.length} repr.{varaer.length > 0 ? ` · ${varaer.length} vara` : ''}
+                </p>
               </div>
             </button>
           );
