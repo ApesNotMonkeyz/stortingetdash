@@ -115,9 +115,9 @@ const API = {
     fetchText(`${BASE}/publikasjon?publikasjonid=${pubId}`),
 };
 
-// Direktelenke til representantbilde (returnerer JPEG, ikke JSON)
+// Direktelenke til personbilde (returnerer JPEG, ikke JSON)
 const fotoUrl = (personId, str = 'stor') =>
-  `${BASE}/representantbilde?personid=${personId}&storrelse=${str}`;
+  `${BASE}/personbilde?personid=${personId}&storrelse=${str}`;
 
 // Hjelpefunksjon: strip HTML-tags → ren tekst (API returnerer HTML i forslagstekst-felter)
 const stripHtml = (html) => {
@@ -247,36 +247,63 @@ const parseNavnParti = (tekst) => {
 parse.referatListe = (xmlText) => {
   try {
     const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
-    return Array.from(doc.querySelectorAll('publikasjon')).map(p => ({
-      id:     (p.querySelector('id')?.textContent     || '').trim(),
-      dato:   (p.querySelector('dato')?.textContent   || '').trim(),
-      tittel: (p.querySelector('tittel')?.textContent || '').trim(),
+    if (doc.getElementsByTagName('parsererror').length) {
+      console.error('[referatListe] XML parse error:', doc.getElementsByTagName('parsererror')[0]?.textContent);
+      return [];
+    }
+    return Array.from(doc.getElementsByTagName('publikasjon')).map(p => ({
+      id:     (p.getElementsByTagName('id')[0]?.textContent     || '').trim(),
+      dato:   (p.getElementsByTagName('dato')[0]?.textContent   || '').trim(),
+      tittel: (p.getElementsByTagName('tittel')[0]?.textContent || '').trim(),
     })).filter(p => p.id);
-  } catch (_) { return []; }
+  } catch (e) { console.error('[referatListe] error:', e); return []; }
 };
 
 // Referat XML → [{ sakId, sakTittel, innlegg: [{ navn, parti, type, tekst }] }]
 parse.referatInnlegg = (xmlText) => {
   try {
     const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
-    const saker = [];
-    doc.querySelectorAll('sak').forEach(sakEl => {
-      const sakId     = sakEl.getAttribute('sakid') || '';
-      const sakTittel = (sakEl.querySelector('saktit')?.textContent ||
-                         sakEl.querySelector('tit')?.textContent    || sakId).trim();
-      const innlegg   = [];
-      sakEl.querySelectorAll('innlegg').forEach(el => {
-        const { navn, parti } = parseNavnParti(el.querySelector('navn')?.textContent || '');
-        const tekst = Array.from(el.querySelectorAll('a'))
-          .map(a => a.textContent.trim()).filter(Boolean).join('\n\n');
-        if (navn && tekst) {
-          innlegg.push({ navn, parti, tekst, type: el.getAttribute('type') || 'innlegg' });
-        }
-      });
-      if (innlegg.length) saker.push({ sakId, sakTittel, innlegg });
+    if (doc.getElementsByTagName('parsererror').length) {
+      console.error('[referatInnlegg] XML parse error:', doc.getElementsByTagName('parsererror')[0]?.textContent);
+      return [];
+    }
+
+    const parseInnlegg = (els) => Array.from(els).map(el => {
+      const { navn, parti } = parseNavnParti(el.getElementsByTagName('navn')[0]?.textContent || '');
+      const tekst = Array.from(el.getElementsByTagName('a'))
+        .map(a => a.textContent.trim()).filter(Boolean).join('\n\n');
+      return navn && tekst ? { navn, parti, tekst, type: el.getAttribute('type') || 'innlegg' } : null;
+    }).filter(Boolean);
+
+    const sakEls = doc.getElementsByTagName('sak');
+    if (sakEls.length > 0) {
+      // Sak-gruppert struktur: <forhandling> → <sak sakid="..."> → <innlegg>
+      return Array.from(sakEls).map(sakEl => {
+        const sakId     = sakEl.getAttribute('sakid') || sakEl.getAttribute('id') || '';
+        const sakTittel = (
+          sakEl.getElementsByTagName('saktit')[0]?.textContent ||
+          sakEl.getElementsByTagName('tit')[0]?.textContent    ||
+          sakEl.getElementsByTagName('tittel')[0]?.textContent || sakId
+        ).trim();
+        const innlegg = parseInnlegg(sakEl.getElementsByTagName('innlegg'));
+        return innlegg.length ? { sakId, sakTittel, innlegg } : null;
+      }).filter(Boolean);
+    }
+
+    // Flat struktur: alle innlegg direkte under rot, grupper etter sakid-attributt
+    const sakMap = new Map();
+    Array.from(doc.getElementsByTagName('innlegg')).forEach(el => {
+      const sakId = el.getAttribute('sakid') || el.getAttribute('sak') || 'ukjent';
+      const { navn, parti } = parseNavnParti(el.getElementsByTagName('navn')[0]?.textContent || '');
+      const tekst = Array.from(el.getElementsByTagName('a'))
+        .map(a => a.textContent.trim()).filter(Boolean).join('\n\n');
+      if (navn && tekst) {
+        if (!sakMap.has(sakId)) sakMap.set(sakId, { sakId, sakTittel: sakId, innlegg: [] });
+        sakMap.get(sakId).innlegg.push({ navn, parti, tekst, type: el.getAttribute('type') || 'innlegg' });
+      }
     });
-    return saker;
-  } catch (_) { return []; }
+    return [...sakMap.values()];
+  } catch (e) { console.error('[referatInnlegg] error:', e); return []; }
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -4186,6 +4213,11 @@ function TalerVisning({ sesjonId, onVelgRep }) {
               <div className="p-8 text-center space-y-2">
                 <p className="text-sm text-red-500">Kunne ikke laste referat</p>
                 <p className="text-xs text-gray-400">{lastFeil}</p>
+              </div>
+            ) : lastetSaker && lastetSaker.length === 0 ? (
+              <div className="p-8 text-center space-y-2">
+                <p className="text-sm text-gray-400">Ingen taler funnet i dette referatet.</p>
+                <p className="text-xs text-gray-300">Sjekk nettleserens konsoll for detaljer (F12).</p>
               </div>
             ) : lastetSaker ? (
               <div>
