@@ -430,11 +430,11 @@ function Blokkanalyse({ totaler, antallFor, antallMot }) {
 }
 
 function VoteringDetalj({ voteringId }) {
-  const [tab, setTab] = useState('partier');
+  const [åpneForslag, setÅpneForslag] = useState(new Set());
   const { data, loading, error }                   = useData(() => API.voteringsresultat(voteringId), [voteringId]);
   const { data: forslagData, loading: forslagLoad } = useData(() => API.voteringsforslag(voteringId), [voteringId]);
 
-  if (loading) return <Spinner />;
+  if (loading) return <div className="p-4 flex justify-center"><Spinner /></div>;
   if (error)   return <FeilMelding feil={error} />;
   if (!data)   return null;
 
@@ -445,114 +445,149 @@ function VoteringDetalj({ voteringId }) {
   const antallFrav = resultater.filter(r => r.votering === 1).length;
   const forslag    = parse.voteringsforslag(forslagData);
 
+  const toggleForslag = (i) => setÅpneForslag(prev => {
+    const ny = new Set(prev);
+    ny.has(i) ? ny.delete(i) : ny.add(i);
+    return ny;
+  });
+
   return (
     <div className="bg-gray-50 border-t border-gray-100">
       {/* Totalresultat */}
-      <div className="grid grid-cols-3 gap-3 p-4 pb-3">
+      <div className="grid grid-cols-3 gap-2 p-4 pb-3">
         {[
           { label: 'For',        antall: antallFor,  farge: 'text-green-600', bg: 'bg-green-50 border-green-200' },
           { label: 'Mot',        antall: antallMot,  farge: 'text-red-500',   bg: 'bg-red-50 border-red-200'     },
-          { label: 'Fraværende', antall: antallFrav, farge: 'text-gray-400',  bg: 'bg-gray-50 border-gray-200'   },
+          { label: 'Fraværende', antall: antallFrav, farge: 'text-gray-400',  bg: 'bg-white border-gray-200'     },
         ].map(({ label, antall, farge, bg }) => (
-          <div key={label} className={`rounded-lg border p-3 text-center ${bg}`}>
-            <div className={`text-2xl font-bold ${farge}`}>{antall}</div>
-            <div className="text-xs text-gray-500 mt-0.5">{label}</div>
+          <div key={label} className={`rounded-lg border p-2.5 text-center ${bg}`}>
+            <div className={`text-xl font-bold ${farge}`}>{antall}</div>
+            <div className="text-[11px] text-gray-500 mt-0.5">{label}</div>
           </div>
         ))}
       </div>
 
-      {/* Tab: Per parti / Blokkanalyse / Forslag */}
-      <div className="flex gap-0 px-4 border-b border-gray-200">
-        {[
-          ['partier', 'Per parti'],
-          ['blokk',   'Blokkanalyse'],
-          ['forslag', `Forslag${forslag.length ? ` (${forslag.length})` : ''}`],
-        ].map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)}
-            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-              tab === id ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-500 hover:text-gray-700'
-            }`}>{label}</button>
-        ))}
+      {/* Blokkanalyse */}
+      <div className="px-4 pb-3">
+        <Blokkanalyse totaler={totaler} antallFor={antallFor} antallMot={antallMot} />
       </div>
-      <div className="p-4">
-        {tab === 'partier' && <PartiStemmebar totaler={totaler} />}
-        {tab === 'blokk'   && <Blokkanalyse totaler={totaler} antallFor={antallFor} antallMot={antallMot} />}
-        {tab === 'forslag' && (
-          forslagLoad ? <Spinner liten /> :
-          forslag.length === 0 ? <TomtResultat tekst="Ingen forslag registrert for denne voteringen." /> :
-          <div className="space-y-3">
+
+      {/* Per parti stemmebars */}
+      <div className="px-4 pb-4">
+        <PartiStemmebar totaler={totaler} />
+      </div>
+
+      {/* Forslag – accordion, flere kan være åpne samtidig */}
+      {forslagLoad ? (
+        <div className="px-4 pb-3"><Spinner liten /></div>
+      ) : forslag.length > 0 && (
+        <div className="border-t border-gray-200 px-4 pt-3 pb-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-2">
+            Forslag ({forslag.length})
+          </p>
+          <div className="space-y-1.5">
             {forslag.map((f, i) => {
               const vedtatt = f.vedtatt === true || f.vedtatt === 'true';
+              const erÅpen  = åpneForslag.has(i);
               return (
-                <div key={i} className={`rounded-lg border p-3 text-sm ${vedtatt ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'}`}>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className={`text-xs font-semibold ${vedtatt ? 'text-green-700' : 'text-gray-500'}`}>
-                      {f.forslag_betegnelse || `Forslag ${i + 1}`}
-                    </span>
-                    {f.vedtatt != null && (
-                      <Badge farge={vedtatt ? 'green' : 'red'} liten>{vedtatt ? 'Vedtatt' : 'Falt'}</Badge>
-                    )}
-                  </div>
-                  {(f.forslag_tekst || f.forslag_tekst_html) && (
-                    <p className="text-gray-700 leading-relaxed text-[13px]">
-                      {stripHtml(f.forslag_tekst || f.forslag_tekst_html)}
-                    </p>
-                  )}
-                  {f.forslagstiller_liste && toArray(f.forslagstiller_liste).length > 0 && (
-                    <p className="text-[11px] text-gray-400 mt-2">
-                      Forslagsstiller: {toArray(f.forslagstiller_liste)
-                        .map(r => [r.fornavn, r.etternavn].filter(Boolean).join(' ') || r.id)
-                        .join(', ')}
-                    </p>
+                <div key={i} className={`rounded-lg border overflow-hidden ${vedtatt ? 'border-green-200' : 'border-gray-200'}`}>
+                  <button onClick={() => toggleForslag(i)}
+                    className={`w-full text-left px-3 py-2 flex items-center justify-between gap-2 transition-colors
+                      ${vedtatt ? (erÅpen ? 'bg-green-100' : 'bg-green-50 hover:bg-green-100') : (erÅpen ? 'bg-gray-50' : 'bg-white hover:bg-gray-50')}`}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs font-semibold text-gray-600 shrink-0">
+                        {f.forslag_betegnelse || `Forslag ${i + 1}`}
+                      </span>
+                      {f.vedtatt != null && (
+                        <Badge farge={vedtatt ? 'green' : 'red'} liten>{vedtatt ? 'Vedtatt' : 'Falt'}</Badge>
+                      )}
+                    </div>
+                    <span className="text-gray-300 text-xs shrink-0">{erÅpen ? '▲' : '▼'}</span>
+                  </button>
+                  {erÅpen && (
+                    <div className={`px-3 pb-3 pt-2 border-t ${vedtatt ? 'border-green-200 bg-green-50' : 'border-gray-100 bg-white'}`}>
+                      {(f.forslag_tekst || f.forslag_tekst_html) && (
+                        <p className="text-[13px] text-gray-700 leading-relaxed">
+                          {stripHtml(f.forslag_tekst || f.forslag_tekst_html)}
+                        </p>
+                      )}
+                      {f.forslagstiller_liste && toArray(f.forslagstiller_liste).length > 0 && (
+                        <p className="text-[11px] text-gray-400 mt-2">
+                          Forslagsstiller: {toArray(f.forslagstiller_liste)
+                            .map(r => [r.fornavn, r.etternavn].filter(Boolean).join(' ') || r.id)
+                            .join(', ')}
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               );
             })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
 
 function VoteringerFane({ sakId }) {
-  const [åpen, setÅpen] = useState(null);
+  const [åpne, setÅpne] = useState(new Set());
   const { data, loading, error } = useData(() => API.voteringer(sakId), [sakId]);
-  if (loading) return <Spinner />;
+  if (loading) return <div className="py-8 flex justify-center"><Spinner /></div>;
   if (error)   return <FeilMelding feil={error} />;
 
   const voteringer = parse.voteringer(data);
-  if (!voteringer.length) return <TomtResultat tekst="Ingen voteringer registrert for denne saken." />;
+
+  const toggleVotering = (id) => setÅpne(prev => {
+    const ny = new Set(prev);
+    ny.has(id) ? ny.delete(id) : ny.add(id);
+    return ny;
+  });
 
   return (
-    <div className="divide-y divide-gray-100">
-      {voteringer.map((v) => {
-        const id     = v.votering_id || v.id || String(Math.random());
-        const erÅpen = åpen === id;
-        const vedtatt = v.vedtatt === true || v.vedtatt === 'true';
-        return (
-          <div key={id}>
-            <button className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors"
-              onClick={() => setÅpen(erÅpen ? null : id)}>
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-gray-800 leading-snug">
-                    {v.votering_tema || v.votering_resultat_type_tekst || `Votering #${v.behandlingsrekkefoelge || id}`}
-                  </p>
-                  <div className="flex items-center gap-3 mt-1.5">
-                    <StatusBadge status={vedtatt ? 'vedtatt' : 'ikke_vedtatt'} />
-                    {v.antall_for != null && (
-                      <span className="text-xs text-gray-400">{v.antall_for} for · {v.antall_mot} mot</span>
-                    )}
-                  </div>
+    <div>
+      {/* Partimatrise øverst – laster automatisk */}
+      <SakPartimatrise sakId={sakId} />
+
+      {/* Voteringsliste */}
+      {voteringer.length === 0 ? (
+        <TomtResultat tekst="Ingen voteringer registrert for denne saken." />
+      ) : (
+        <div>
+          <p className="px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 border-b border-gray-100">
+            Voteringer ({voteringer.length})
+          </p>
+          <div className="divide-y divide-gray-100">
+            {voteringer.map((v) => {
+              const id     = v.votering_id || v.id || String(Math.random());
+              const erÅpen = åpne.has(id);
+              const vedtatt = v.vedtatt === true || v.vedtatt === 'true';
+              return (
+                <div key={id}>
+                  <button className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors"
+                    onClick={() => toggleVotering(id)}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-800 leading-snug">
+                          {v.votering_tema || v.votering_resultat_type_tekst || `Votering #${v.behandlingsrekkefoelge || id}`}
+                        </p>
+                        <div className="flex items-center gap-3 mt-1.5">
+                          <StatusBadge status={vedtatt ? 'vedtatt' : 'ikke_vedtatt'} />
+                          {v.antall_for != null && (
+                            <span className="text-xs text-gray-400">{v.antall_for} for · {v.antall_mot} mot</span>
+                          )}
+                        </div>
+                      </div>
+                      <span className="text-gray-300 shrink-0 mt-0.5">{erÅpen ? '▲' : '▼'}</span>
+                    </div>
+                  </button>
+                  {erÅpen && <VoteringDetalj voteringId={id} />}
                 </div>
-                <span className="text-gray-300 shrink-0 mt-0.5">{erÅpen ? '▲' : '▼'}</span>
-              </div>
-            </button>
-            {erÅpen && <VoteringDetalj voteringId={id} />}
+              );
+            })}
           </div>
-        );
-      })}
+        </div>
+      )}
     </div>
   );
 }
@@ -645,67 +680,82 @@ function SakPartimatrise({ sakId }) {
 
   const { partiIds, partiNavn, matrix, antVoteringer } = tilstand;
 
-  // Fargeskala: 0–49 rød, 50–69 oransje, 70–84 lysgrønn, 85–100 mørkgrønn
-  const matriseKlass = (pct) => {
-    if (pct === null) return 'bg-gray-100 text-gray-300';
-    if (pct >= 85)   return 'bg-green-600 text-white';
-    if (pct >= 70)   return 'bg-green-300 text-green-900';
-    if (pct >= 50)   return 'bg-yellow-200 text-yellow-900';
-    return 'bg-red-200 text-red-900';
+  // HSL-gradient: 0 % → rød (0°), 50 % → gul (60°), 100 % → grønn (120°)
+  const cellStyle = (pct, isSelf) => {
+    if (isSelf)       return { background: '#f1f5f9', color: '#94a3b8' };
+    if (pct === null) return { background: '#f8fafc', color: '#cbd5e1' };
+    const hue   = Math.round(pct * 1.2);
+    const light = pct >= 70 ? 36 : pct >= 50 ? 42 : 46;
+    return { background: `hsl(${hue},62%,${light}%)`, color: 'white' };
   };
 
-  return (
-    <div className="p-4">
-      <p className="text-xs text-gray-400 mb-4">
-        Basert på {antVoteringer} votering{antVoteringer !== 1 ? 'er' : ''} i denne saken.
-        Viser hvor ofte to partier stemmer <em>likt</em> (begge for eller begge mot) når begge deltar.
-      </p>
+  const CELL = 42;
 
-      {/* Skrollbar matrise */}
+  return (
+    <div className="px-5 py-4 border-b border-gray-100">
+      <div className="flex items-baseline justify-between mb-4">
+        <h3 className="text-sm font-semibold text-gray-700">Partikohesjonsmatrise</h3>
+        <span className="text-[11px] text-gray-400">
+          {antVoteringer} votering{antVoteringer !== 1 ? 'er' : ''} · % like stemmer
+        </span>
+      </div>
+
       <div className="overflow-x-auto">
-        <table className="text-[11px] border-collapse">
-          <thead>
-            <tr>
-              <th className="w-24" />
-              {partiIds.map(pid => (
-                <th key={pid} className="px-1 pb-2 font-semibold text-center"
-                  style={{ color: PARTI_FARGER[pid] || '#6b7280', minWidth: '38px' }}>
-                  {pid}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {partiIds.map(a => (
-              <tr key={a}>
-                <td className="pr-2 py-0.5 font-semibold text-right whitespace-nowrap"
-                  style={{ color: PARTI_FARGER[a] || '#6b7280' }}>
-                  {partiNavn[a] || a}
-                </td>
-                {partiIds.map(b => {
-                  const pct = a === b ? 100 : matrix[a][b];
-                  return (
-                    <td key={b} title={pct !== null ? `${partiNavn[a]} ↔ ${partiNavn[b]}: ${pct}%` : 'For lite data'}
-                      className={`text-center font-semibold rounded-sm m-px w-9 h-7 tabular-nums ${matriseKlass(pct)}`}>
-                      {pct !== null ? `${pct}` : '·'}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div style={{ display: 'inline-grid', gridTemplateColumns: `76px repeat(${partiIds.length}, ${CELL}px)`, gap: '3px', alignItems: 'center' }}>
+          {/* Tom hjørnecelle */}
+          <div />
+          {/* Kolonneoverskrifter */}
+          {partiIds.map(pid => (
+            <div key={pid} title={partiNavn[pid]}
+              style={{ textAlign: 'center', fontSize: '11px', fontWeight: 700,
+                color: PARTI_FARGER[pid] || '#6b7280', paddingBottom: '4px', lineHeight: 1 }}>
+              {pid}
+            </div>
+          ))}
+
+          {/* Rader */}
+          {partiIds.map(a => (
+            <React.Fragment key={a}>
+              <div title={partiNavn[a]}
+                style={{ fontSize: '11px', fontWeight: 700, color: PARTI_FARGER[a] || '#6b7280',
+                  textAlign: 'right', paddingRight: '8px', lineHeight: 1,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {a}
+              </div>
+              {partiIds.map(b => {
+                const isSelf = a === b;
+                const pct    = isSelf ? null : matrix[a][b];
+                const s      = cellStyle(pct, isSelf);
+                return (
+                  <div key={b}
+                    title={isSelf
+                      ? partiNavn[a]
+                      : `${partiNavn[a]} ↔ ${partiNavn[b]}: ${pct !== null ? pct + '%' : 'For lite data'}`}
+                    style={{ width: `${CELL}px`, height: `${CELL}px`, borderRadius: '5px',
+                      ...s, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '12px', fontWeight: 700, cursor: 'default', userSelect: 'none' }}>
+                    {isSelf ? '·' : (pct !== null ? pct : '·')}
+                  </div>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
       </div>
 
       {/* Fargeforklaring */}
-      <div className="flex gap-3 flex-wrap mt-4 text-[11px] text-gray-500">
-        {[['bg-green-600 text-white','85–100% enig'],['bg-green-300 text-green-900','70–84%'],
-          ['bg-yellow-200 text-yellow-900','50–69%'],['bg-red-200 text-red-900','0–49% uenig']].map(([cls,lbl]) => (
-          <span key={lbl} className="flex items-center gap-1">
-            <span className={`inline-block w-5 h-4 rounded-sm ${cls}`} />
+      <div className="flex gap-4 flex-wrap mt-4 pt-3 border-t border-gray-100 text-[11px] text-gray-500">
+        {[[108,'85–100% enig'],[84,'70–84%'],[60,'50–69%'],[12,'0–49% uenig']].map(([hue, lbl]) => (
+          <span key={lbl} className="flex items-center gap-1.5">
+            <span style={{ display:'inline-block', width:'14px', height:'14px', borderRadius:'3px',
+              background:`hsl(${hue},62%,42%)` }} />
             {lbl}
           </span>
         ))}
+        <span className="flex items-center gap-1.5">
+          <span style={{ display:'inline-block', width:'14px', height:'14px', borderRadius:'3px', background:'#f1f5f9' }} />
+          For lite data
+        </span>
       </div>
     </div>
   );
@@ -715,9 +765,8 @@ function SakPartimatrise({ sakId }) {
 // SEKSJON 6: SAK-DETALJ (Fase 1)
 // ═══════════════════════════════════════════════════════════════
 const SAK_FANER = [
-  { id: 'info',        label: 'Info'         },
-  { id: 'voteringer',  label: 'Voteringer'   },
-  { id: 'partimatrise',label: 'Partimatrise' },
+  { id: 'info',       label: 'Info'       },
+  { id: 'voteringer', label: 'Voteringer' },
 ];
 
 function SakDetalj({ sakId, onLukk }) {
@@ -821,8 +870,7 @@ function SakDetalj({ sakId, onLukk }) {
             )}
           </div>
         )}
-        {fane === 'voteringer'   && <VoteringerFane    sakId={sakId} />}
-        {fane === 'partimatrise' && <SakPartimatrise   sakId={sakId} />}
+        {fane === 'voteringer' && <VoteringerFane sakId={sakId} />}
       </div>
     </div>
   );
