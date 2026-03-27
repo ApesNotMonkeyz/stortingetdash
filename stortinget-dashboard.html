@@ -68,6 +68,27 @@ const fetchJson = async (url) => {
   }
 };
 
+const fetchText = async (url) => {
+  if (_cache.has(url)) return _cache.get(url);
+  await _semAcquire();
+  try {
+    for (let forsøk = 0; forsøk < 4; forsøk++) {
+      const res = await fetch(url);
+      if (res.status === 429) {
+        await new Promise(r => setTimeout(r, 2500 + forsøk * 1000));
+        continue;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      _cache.set(url, text);
+      return text;
+    }
+    throw new Error('For mange forsøk (429) – prøv igjen om litt');
+  } finally {
+    _semRelease();
+  }
+};
+
 const API = {
   // ── Fase 1: Saker & voteringer ──────────────────────────────
   sesjoner:          ()             => fetchJson(`${BASE}/sesjoner?format=json`),
@@ -87,9 +108,11 @@ const API = {
   interpellasjoner:   (sesjonId) => fetchJson(`${BASE}/interpellasjoner?sesjonid=${sesjonId}&format=json`),
   sporretimeSporsmal: (sesjonId) => fetchJson(`${BASE}/sporretimesporsmal?sesjonid=${sesjonId}&format=json`),
 
-  // ── Fase 4 (fremtidig) ───────────────────────────────────────
-  // komiteer: (sesjonId) => fetchJson(`${BASE}/komiteer?sesjonid=${sesjonId}&format=json`),
-  // horinger: (sesjonId) => fetchJson(`${BASE}/horinger?sesjonid=${sesjonId}&format=json`),
+  // ── Fase 4: Taler / møtereferater (XML) ─────────────────────
+  referatListe: (sesjonId) =>
+    fetchText(`${BASE}/publikasjoner?publikasjontype=referat&sesjonid=${sesjonId}`),
+  referat: (pubId) =>
+    fetchText(`${BASE}/publikasjon?publikasjonid=${pubId}`),
 };
 
 // Direktelenke til representantbilde (returnerer JPEG, ikke JSON)
@@ -206,6 +229,54 @@ const parse = {
     return Object.values(partier)
       .sort((a, b) => b.representanter.length - a.representanter.length);
   },
+};
+
+// ── XML-parsere for møtereferater ───────────────────────────────
+
+// Hjelper: "Jonas Gahr Støre (A):" → { navn: "Jonas Gahr Støre", parti: "A" }
+const parseNavnParti = (tekst) => {
+  const t = (tekst || '').trim();
+  const m = t.match(/^(.+?)\s*\(([^)]+)\)\s*:?\s*$/);
+  return {
+    navn:  m?.[1]?.trim() || t.replace(/\s*\([^)]*\)\s*:?\s*$/, '').trim(),
+    parti: m?.[2]?.trim() || '',
+  };
+};
+
+// Referat-liste XML → [{ id, dato, tittel }]
+parse.referatListe = (xmlText) => {
+  try {
+    const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+    return Array.from(doc.querySelectorAll('publikasjon')).map(p => ({
+      id:     (p.querySelector('id')?.textContent     || '').trim(),
+      dato:   (p.querySelector('dato')?.textContent   || '').trim(),
+      tittel: (p.querySelector('tittel')?.textContent || '').trim(),
+    })).filter(p => p.id);
+  } catch (_) { return []; }
+};
+
+// Referat XML → [{ sakId, sakTittel, innlegg: [{ navn, parti, type, tekst }] }]
+parse.referatInnlegg = (xmlText) => {
+  try {
+    const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+    const saker = [];
+    doc.querySelectorAll('sak').forEach(sakEl => {
+      const sakId     = sakEl.getAttribute('sakid') || '';
+      const sakTittel = (sakEl.querySelector('saktit')?.textContent ||
+                         sakEl.querySelector('tit')?.textContent    || sakId).trim();
+      const innlegg   = [];
+      sakEl.querySelectorAll('innlegg').forEach(el => {
+        const { navn, parti } = parseNavnParti(el.querySelector('navn')?.textContent || '');
+        const tekst = Array.from(el.querySelectorAll('a'))
+          .map(a => a.textContent.trim()).filter(Boolean).join('\n\n');
+        if (navn && tekst) {
+          innlegg.push({ navn, parti, tekst, type: el.getAttribute('type') || 'innlegg' });
+        }
+      });
+      if (innlegg.length) saker.push({ sakId, sakTittel, innlegg });
+    });
+    return saker;
+  } catch (_) { return []; }
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -3561,6 +3632,601 @@ function TemaHubVisning({ sesjonId, onRepKlikk, onSakKlikk, onSporsmalKlikk }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// SEKSJON 11b: TALER — møtereferater + taleaktivitetsindeks
+// ═══════════════════════════════════════════════════════════════
+
+// ── InnleggKort — ett enkelt taleinnlegg ──────────────────────
+function InnleggKort({ innlegg, rep, onVelgRep, søkL }) {
+  const [ekspandert, setEkspandert] = useState(false);
+  const farge = PARTI_FARGER[innlegg.parti] || '#6b7280';
+  const erHoved = innlegg.type === 'hovedinnlegg' || innlegg.type === 'innlegg';
+  const GRENSE = 400;
+  const kortTekst = innlegg.tekst.length > GRENSE && !ekspandert
+    ? innlegg.tekst.slice(0, GRENSE) + '…'
+    : innlegg.tekst;
+
+  const hilite = (tekst) => {
+    if (!søkL || !tekst) return tekst;
+    const esc = søkL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const parts = tekst.split(new RegExp(`(${esc})`, 'gi'));
+    return parts.map((p, i) =>
+      p.toLowerCase() === søkL ? <mark key={i} className="bg-yellow-100 rounded px-0.5">{p}</mark> : p
+    );
+  };
+
+  return (
+    <div className={`flex gap-3 p-3 rounded-lg ${erHoved ? 'bg-white border border-gray-100 shadow-sm' : 'bg-gray-50'}`}>
+      {rep
+        ? <RepFoto personId={rep.id} navn={innlegg.navn} />
+        : <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center text-sm font-semibold text-gray-500 shrink-0">
+            {innlegg.navn.split(' ').map(n => n[0]).filter(Boolean).slice(0,2).join('')}
+          </div>
+      }
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap mb-1.5">
+          <button
+            onClick={() => rep && onVelgRep && onVelgRep(rep)}
+            className={`text-xs font-semibold leading-tight ${rep ? 'hover:underline' : 'cursor-default'}`}
+            style={{ color: farge }}>
+            {innlegg.navn}
+          </button>
+          {innlegg.parti && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium text-white shrink-0"
+              style={{ background: farge }}>
+              {innlegg.parti}
+            </span>
+          )}
+          {!erHoved && (
+            <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full shrink-0">
+              {innlegg.type === 'replikk' ? 'Replikk' : innlegg.type}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">
+          {hilite(kortTekst)}
+        </p>
+        {innlegg.tekst.length > GRENSE && (
+          <button onClick={() => setEkspandert(e => !e)}
+            className="text-[11px] text-blue-500 hover:text-blue-700 mt-1.5">
+            {ekspandert ? 'Vis mindre ↑' : 'Les mer ↓'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── SakInnleggListe — alle saker med innlegg i ett referat ────
+function SakInnleggListe({ saker, repsMap, onVelgRep, søk }) {
+  const [åpneSaker, setÅpneSaker] = useState(new Set());
+  const søkL = søk.toLowerCase().trim();
+  const prevLen = React.useRef(0);
+
+  useEffect(() => {
+    if (saker.length && saker.length !== prevLen.current) {
+      setÅpneSaker(new Set(saker.map(s => s.sakId + s.sakTittel)));
+      prevLen.current = saker.length;
+    }
+  }, [saker.length]);
+
+  if (!saker.length) {
+    return <div className="p-8 text-center text-sm text-gray-400">Ingen treff med valgte filtre</div>;
+  }
+
+  const toggle = (key) => setÅpneSaker(prev => {
+    const ny = new Set(prev);
+    ny.has(key) ? ny.delete(key) : ny.add(key);
+    return ny;
+  });
+
+  return (
+    <div className="divide-y divide-gray-100">
+      {saker.map(sak => {
+        const key  = sak.sakId + sak.sakTittel;
+        const åpen = åpneSaker.has(key);
+        return (
+          <div key={key}>
+            <button onClick={() => toggle(key)}
+              className="w-full text-left px-4 py-3 flex items-center justify-between gap-3 hover:bg-gray-50 transition-colors">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-800 leading-snug">{sak.sakTittel || 'Ukjent sak'}</p>
+                <p className="text-[11px] text-gray-400 mt-0.5">{sak.innlegg.length} innlegg</p>
+              </div>
+              <span className="text-gray-300 text-xs shrink-0">{åpen ? '▲' : '▼'}</span>
+            </button>
+            {åpen && (
+              <div className="px-4 pb-4 space-y-2">
+                {sak.innlegg.map((inn, i) => {
+                  const rep = repsMap.get(inn.navn.toLowerCase().trim());
+                  return <InnleggKort key={i} innlegg={inn} rep={rep} onVelgRep={onVelgRep} søkL={søkL} />;
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── TalerRepAktivitetDetalj — én reps taleaktivitet (metadata) ─
+function TalerRepAktivitetDetalj({ rep, indeks, onVelgRep }) {
+  const navn  = [rep.fornavn, rep.etternavn].filter(Boolean).join(' ');
+  const farge = PARTI_FARGER[rep.parti?.id] || '#6b7280';
+  const akt   = [...(indeks.taleIndeks.get(rep.id) || [])].sort((a, b) =>
+    (b.antall_innlegg || 0) - (a.antall_innlegg || 0));
+  const tot = indeks.repTotaler.get(rep.id) || { ti: 0, ts: 0 };
+  const fmtTid = (s) => { const m = Math.floor(s/60); const r = s%60; return m > 0 ? `${m}m ${r}s` : `${s}s`; };
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="flex items-center gap-3">
+        <RepFoto personId={rep.id} navn={navn} stor />
+        <div className="flex-1 min-w-0">
+          <h2 className="text-base font-semibold text-gray-900 leading-tight">{navn}</h2>
+          <p className="text-sm font-semibold mt-0.5" style={{ color: farge }}>
+            {rep.parti?.navn || rep.parti?.id}
+          </p>
+          <div className="flex gap-3 mt-1.5">
+            <span className="text-xs text-gray-500">{tot.ti} innlegg totalt</span>
+            <span className="text-xs text-gray-500">{fmtTid(tot.ts)} taletid</span>
+          </div>
+        </div>
+        <button onClick={() => onVelgRep && onVelgRep(rep)}
+          className="text-xs text-blue-500 hover:text-blue-700 shrink-0">
+          Profil ↗
+        </button>
+      </div>
+
+      <div>
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
+          Saker ({akt.length})
+        </p>
+        <div className="space-y-1.5">
+          {akt.map((a, i) => {
+            const sek = a.taletid_i_sekunder || a.taletid_sekunder || 0;
+            const m   = Math.floor(sek/60), r = sek%60;
+            return (
+              <div key={i} className="flex items-start gap-3 bg-gray-50 rounded-lg px-3 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-gray-800 leading-snug">
+                    {a.sak_tittel || a.sak_kortittel || `Sak #${a.sak_id}`}
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-xs font-semibold text-gray-700 tabular-nums">
+                    {m > 0 ? `${m}:${String(r).padStart(2,'0')}` : `${sek}s`}
+                  </p>
+                  {a.antall_innlegg > 0 && (
+                    <p className="text-[10px] text-gray-400">{a.antall_innlegg} innlegg</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── TalerSakAktivitetDetalj — hvem snakket om én sak (metadata) ─
+function TalerSakAktivitetDetalj({ sakId, indeks, onVelgRep }) {
+  const sakInfo = indeks.sakTitler.get(sakId) || {};
+  const talere  = [...(indeks.sakIndeks.get(sakId) || [])].sort((a, b) => b.innlegg - a.innlegg);
+  const totalInnlegg = talere.reduce((s, t) => s + t.innlegg, 0);
+  const fmtTid = (s) => { const m = Math.floor(s/60); const r = s%60; return m > 0 ? `${m}m ${r}s` : `${s}s`; };
+
+  const partiTotaler = {};
+  talere.forEach(t => {
+    const pid = t.rep.parti?.id || 'Ukjent';
+    partiTotaler[pid] = (partiTotaler[pid] || 0) + t.innlegg;
+  });
+
+  return (
+    <div className="p-4 space-y-4">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900 leading-snug">
+          {sakInfo.tittel || sakInfo.korttittel || `Sak ${sakId}`}
+        </h2>
+        {sakInfo.emner?.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {sakInfo.emner.map(e => (
+              <span key={e} className="text-[10px] bg-gray-100 text-gray-500 rounded-full px-2 py-0.5">{e}</span>
+            ))}
+          </div>
+        )}
+        <p className="text-xs text-gray-400 mt-1.5">
+          {talere.length} unike talere · {totalInnlegg} innlegg totalt
+        </p>
+      </div>
+
+      {Object.keys(partiTotaler).length > 1 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Parti-fordeling</p>
+          <div className="flex h-3 rounded-full overflow-hidden gap-px">
+            {Object.entries(partiTotaler).sort((a,b) => b[1]-a[1]).map(([pid, n]) => (
+              <div key={pid} title={`${pid}: ${n} innlegg`}
+                style={{ width: `${Math.round(n/totalInnlegg*100)}%`, background: PARTI_FARGER[pid] || '#9ca3af' }} />
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2 mt-1.5">
+            {Object.entries(partiTotaler).sort((a,b) => b[1]-a[1]).map(([pid, n]) => (
+              <div key={pid} className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: PARTI_FARGER[pid] || '#9ca3af' }} />
+                <span className="text-[10px] text-gray-500">{pid} {n}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Talere</p>
+        <div className="space-y-1.5">
+          {talere.map((t, i) => {
+            const navn  = [t.rep.fornavn, t.rep.etternavn].filter(Boolean).join(' ');
+            const farge = PARTI_FARGER[t.rep.parti?.id] || '#6b7280';
+            return (
+              <button key={t.rep.id || i} onClick={() => onVelgRep && onVelgRep(t.rep)}
+                className="w-full flex items-center gap-2.5 bg-gray-50 hover:bg-blue-50 rounded-lg px-3 py-2 transition-colors">
+                <span className="text-[11px] text-gray-300 w-4 text-right shrink-0">{i+1}</span>
+                <RepFoto personId={t.rep.id} navn={navn} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-gray-800 truncate">{navn}</p>
+                  <p className="text-[10px] font-semibold" style={{ color: farge }}>{t.rep.parti?.id}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-xs font-bold text-gray-600">{t.innlegg} innlegg</p>
+                  <p className="text-[10px] text-gray-400">{fmtTid(t.sek)}</p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── TalerVisning — hoved-view ─────────────────────────────────
+function TalerVisning({ sesjonId, onVelgRep }) {
+  const [modus, setModus]       = useState('referat');
+  const [valgtPubId, setValgtPubId]   = useState(null);
+  const [lastetSaker, setLastetSaker] = useState(null);
+  const [lastes, setLastes]           = useState(false);
+  const [lastFeil, setLastFeil]       = useState(null);
+  const [indeks, setIndeks]           = useState(null);
+  const [bygger, setBygger]           = useState(false);
+  const [progress, setProgress]       = useState({ gjort: 0, total: 0 });
+  const [valgtRep, setValgtRep]       = useState(null);
+  const [valgtSakId, setValgtSakId]   = useState(null);
+  const [aktivModus, setAktivModus]   = useState('rep');
+  const [søk, setSøk]                 = useState('');
+  const [partiFilter, setPartiFilter] = useState('alle');
+
+  const { data: referatXml, loading: referatListeLastes, error: referatListeFeil } =
+    useData(sesjonId ? () => API.referatListe(sesjonId) : null, [sesjonId]);
+  const { data: repsData }  = useData(() => API.dagensRepresentanter(), []);
+  const { data: sakerData } = useData(sesjonId ? () => API.saker(sesjonId) : null, [sesjonId]);
+
+  const reps = useMemo(() => parse.representanter(repsData), [repsData]);
+
+  const repsMap = useMemo(() => {
+    const m = new Map();
+    reps.forEach(r => m.set(`${r.fornavn} ${r.etternavn}`.toLowerCase().trim(), r));
+    return m;
+  }, [reps]);
+
+  const referatListe = useMemo(() =>
+    referatXml ? parse.referatListe(referatXml) : [], [referatXml]);
+
+  const lastReferat = async (pubId) => {
+    if (valgtPubId === pubId && lastetSaker) return;
+    setValgtPubId(pubId);
+    setLastes(true);
+    setLastFeil(null);
+    setLastetSaker(null);
+    setSøk('');
+    setPartiFilter('alle');
+    try {
+      const xml = await API.referat(pubId);
+      setLastetSaker(parse.referatInnlegg(xml));
+    } catch (e) {
+      setLastFeil(e.message || 'Kunne ikke laste referat');
+    } finally {
+      setLastes(false);
+    }
+  };
+
+  const partiIReferat = useMemo(() => {
+    if (!lastetSaker) return [];
+    const s = new Set();
+    lastetSaker.forEach(sak => sak.innlegg.forEach(inn => { if (inn.parti) s.add(inn.parti); }));
+    return [...s].sort();
+  }, [lastetSaker]);
+
+  const søkL = søk.toLowerCase().trim();
+
+  const filtrerteSaker = useMemo(() => {
+    if (!lastetSaker) return [];
+    return lastetSaker
+      .map(sak => ({
+        ...sak,
+        innlegg: sak.innlegg.filter(inn => {
+          if (partiFilter !== 'alle' && inn.parti !== partiFilter) return false;
+          if (!søkL) return true;
+          return inn.navn.toLowerCase().includes(søkL) ||
+                 inn.parti.toLowerCase().includes(søkL) ||
+                 inn.tekst.toLowerCase().includes(søkL);
+        }),
+      }))
+      .filter(sak => sak.innlegg.length > 0);
+  }, [lastetSaker, søkL, partiFilter]);
+
+  const byggIndeks = async () => {
+    if (bygger || !sesjonId || reps.length === 0) return;
+    setBygger(true);
+    setProgress({ gjort: 0, total: reps.length });
+    const saker = parse.saker(sakerData);
+    const sakTitler = new Map();
+    saker.forEach(s => sakTitler.set(String(s.id), {
+      tittel: s.tittel, korttittel: s.korttittel,
+      emner: toArray(s.emne_liste).map(e => e.navn).filter(Boolean),
+    }));
+    const taleIndeks = new Map(), sakIndeks = new Map(), repTotaler = new Map();
+    let gjort = 0;
+    await Promise.all(reps.map(async (rep) => {
+      try {
+        const d   = await API.taleaktivitet(rep.id, sesjonId);
+        const akt = parse.taleaktivitet(d);
+        const ti  = akt.reduce((s, a) => s + (a.antall_innlegg || 0), 0);
+        const ts  = akt.reduce((s, a) => s + (a.taletid_i_sekunder || a.taletid_sekunder || 0), 0);
+        taleIndeks.set(rep.id, akt);
+        repTotaler.set(rep.id, { ti, ts });
+        akt.forEach(a => {
+          const sid = String(a.sak_id);
+          if (!sakIndeks.has(sid)) sakIndeks.set(sid, []);
+          sakIndeks.get(sid).push({ rep, innlegg: a.antall_innlegg || 0,
+            sek: a.taletid_i_sekunder || a.taletid_sekunder || 0 });
+        });
+      } catch (_) {}
+      gjort++;
+      setProgress({ gjort, total: reps.length });
+    }));
+    setIndeks({ taleIndeks, sakIndeks, repTotaler, sakTitler });
+    setBygger(false);
+  };
+
+  const partierListe = useMemo(() =>
+    [...new Set(reps.map(r => r.parti?.id).filter(Boolean))].sort(), [reps]);
+
+  const filtrertReps = useMemo(() => reps
+    .filter(r => {
+      const navn = `${r.fornavn} ${r.etternavn}`.toLowerCase();
+      if (partiFilter !== 'alle' && r.parti?.id !== partiFilter) return false;
+      if (søkL && !navn.includes(søkL)) return false;
+      if (indeks && !(indeks.repTotaler.get(r.id)?.ti > 0)) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const ta = indeks?.repTotaler.get(a.id)?.ti || 0;
+      const tb = indeks?.repTotaler.get(b.id)?.ti || 0;
+      return tb - ta || (a.etternavn || '').localeCompare(b.etternavn || '', 'nb');
+    }), [reps, søkL, partiFilter, indeks]);
+
+  const filtrertAktivitetSaker = useMemo(() => {
+    if (!indeks) return [];
+    return [...indeks.sakIndeks.entries()]
+      .map(([sakId, talere]) => ({
+        sakId, info: indeks.sakTitler.get(sakId) || {}, talere,
+        unikeTalere: talere.length,
+        totalInnlegg: talere.reduce((s, t) => s + t.innlegg, 0),
+      }))
+      .filter(s => {
+        if (!søkL) return true;
+        const tittel = `${s.info.tittel||''} ${s.info.korttittel||''}`.toLowerCase();
+        return tittel.includes(søkL) || (s.info.emner||[]).join(' ').toLowerCase().includes(søkL);
+      })
+      .sort((a, b) => b.unikeTalere - a.unikeTalere)
+      .slice(0, 100);
+  }, [indeks, søkL]);
+
+  const switchModus = (m) => { setModus(m); setSøk(''); setPartiFilter('alle'); };
+
+  return (
+    <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+      {/* Modus-velger */}
+      <div className="flex border-b border-gray-200 shrink-0 bg-white px-4">
+        {[{ id:'referat', label:'Møtereferater' }, { id:'aktivitet', label:'Taleaktivitet' }].map(m => (
+          <button key={m.id} onClick={() => switchModus(m.id)}
+            className={`px-4 py-2.5 text-sm font-medium transition-colors ${
+              modus === m.id ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-800'
+            }`}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* VENSTRE PANEL */}
+        <div className="w-64 shrink-0 border-r border-gray-200 flex flex-col overflow-hidden bg-white">
+          <div className="p-3 border-b border-gray-100 space-y-2 shrink-0">
+            <div className="relative">
+              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-300 text-sm pointer-events-none">🔍</span>
+              <input value={søk} onChange={e => setSøk(e.target.value)}
+                placeholder={modus === 'referat' ? 'Søk i referat…' : 'Søk representant…'}
+                className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-400" />
+            </div>
+            {(modus === 'referat' ? partiIReferat : partierListe).length > 0 && (
+              <select value={partiFilter} onChange={e => setPartiFilter(e.target.value)}
+                className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
+                <option value="alle">Alle partier</option>
+                {(modus === 'referat' ? partiIReferat : partierListe).map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            {modus === 'referat' ? (
+              referatListeLastes ? <div className="flex justify-center py-8"><Spinner /></div>
+              : referatListeFeil ? <p className="p-4 text-xs text-red-400">Kunne ikke laste møteliste</p>
+              : referatListe.length === 0 ? <p className="p-4 text-xs text-gray-400">Ingen referater funnet for sesjonen</p>
+              : referatListe.map(pub => {
+                  const dato  = (pub.dato || '').split('T')[0];
+                  const datoF = dato ? new Date(dato).toLocaleDateString('nb-NO', { day:'numeric', month:'short', year:'2-digit' }) : '';
+                  const valgt = valgtPubId === pub.id;
+                  return (
+                    <button key={pub.id} onClick={() => lastReferat(pub.id)}
+                      className={`w-full text-left px-3 py-2.5 border-b border-gray-100 flex items-start gap-2.5 transition-colors ${
+                        valgt ? 'bg-blue-50 border-l-[3px] border-l-blue-500' : 'hover:bg-gray-50 border-l-[3px] border-l-transparent'
+                      }`}>
+                      <p className="text-xs font-semibold text-gray-600 shrink-0 w-16 leading-tight">{datoF}</p>
+                      <p className="text-xs text-gray-500 line-clamp-2 leading-tight flex-1">{pub.tittel}</p>
+                    </button>
+                  );
+                })
+            ) : (
+              <div className="flex flex-col h-full">
+                {indeks && (
+                  <div className="flex border-b border-gray-100 shrink-0">
+                    {[{ id:'rep', label:'Representanter' }, { id:'sak', label:'Saker' }].map(m => (
+                      <button key={m.id} onClick={() => setAktivModus(m.id)}
+                        className={`flex-1 py-2 text-xs font-medium transition-colors ${
+                          aktivModus === m.id ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500'
+                        }`}>
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {!indeks && !bygger && (
+                  <div className="p-4 space-y-3">
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                      Last taleaktivitet for alle representanter for å se hvem som har snakket mest og om hvilke saker.
+                    </p>
+                    <button onClick={byggIndeks} disabled={!sesjonId || reps.length === 0}
+                      className="w-full py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50 transition-colors">
+                      Analyser alle talere ▶
+                    </button>
+                  </div>
+                )}
+                {bygger && (
+                  <div className="p-4 space-y-2">
+                    <div className="flex justify-between text-xs text-gray-400">
+                      <span>Laster…</span>
+                      <span>{progress.gjort}/{progress.total}</span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-500 rounded-full transition-all duration-200"
+                        style={{ width: progress.total > 0 ? `${Math.round(progress.gjort/progress.total*100)}%` : '0%' }} />
+                    </div>
+                  </div>
+                )}
+                <div className="flex-1 overflow-y-auto">
+                  {indeks && aktivModus === 'rep' && filtrertReps.map((r, idx) => {
+                    const navn  = [r.fornavn, r.etternavn].filter(Boolean).join(' ');
+                    const farge = PARTI_FARGER[r.parti?.id] || '#6b7280';
+                    const tot   = indeks.repTotaler.get(r.id) || { ti: 0 };
+                    const valgt = valgtRep?.id === r.id;
+                    return (
+                      <button key={r.id} onClick={() => { setValgtRep(r); setValgtSakId(null); }}
+                        className={`w-full text-left px-3 py-2.5 border-b border-gray-100 flex items-center gap-2.5 transition-colors ${
+                          valgt ? 'bg-blue-50 border-l-[3px] border-l-blue-500' : 'hover:bg-gray-50 border-l-[3px] border-l-transparent'
+                        }`}>
+                        <span className="text-[10px] text-gray-300 w-5 text-right shrink-0">{idx+1}</span>
+                        <RepFoto personId={r.id} navn={navn} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-gray-800 truncate">{navn}</p>
+                          <p className="text-[10px] font-semibold" style={{ color: farge }}>{r.parti?.id}</p>
+                        </div>
+                        <span className="text-xs font-bold text-gray-500 shrink-0">{tot.ti}</span>
+                      </button>
+                    );
+                  })}
+                  {indeks && aktivModus === 'sak' && filtrertAktivitetSaker.map(s => {
+                    const tittel = s.info.tittel || s.info.korttittel || `Sak ${s.sakId}`;
+                    const valgt  = valgtSakId === s.sakId;
+                    return (
+                      <button key={s.sakId} onClick={() => { setValgtSakId(s.sakId); setValgtRep(null); }}
+                        className={`w-full text-left px-3 py-2.5 border-b border-gray-100 flex items-start gap-2 transition-colors ${
+                          valgt ? 'bg-blue-50 border-l-[3px] border-l-blue-500' : 'hover:bg-gray-50 border-l-[3px] border-l-transparent'
+                        }`}>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-gray-800 line-clamp-2 leading-tight">{tittel}</p>
+                          <p className="text-[10px] text-gray-400 mt-0.5">{s.unikeTalere} talere · {s.totalInnlegg} innlegg</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* HØYRE PANEL */}
+        <div className="flex-1 overflow-y-auto min-h-0">
+          {modus === 'referat' ? (
+            !valgtPubId ? (
+              <div className="flex items-center justify-center h-full text-center p-8">
+                <div className="space-y-2">
+                  <p className="text-4xl">📜</p>
+                  <p className="text-sm text-gray-500">Velg et møte til venstre for å lese referatet</p>
+                  <p className="text-xs text-gray-400">Søk og partifilter gjelder innenfor lastet referat</p>
+                </div>
+              </div>
+            ) : lastes ? (
+              <div className="flex flex-col items-center justify-center h-full gap-3">
+                <Spinner /><p className="text-sm text-gray-400">Laster referat…</p>
+              </div>
+            ) : lastFeil ? (
+              <div className="p-8 text-center space-y-2">
+                <p className="text-sm text-red-500">Kunne ikke laste referat</p>
+                <p className="text-xs text-gray-400">{lastFeil}</p>
+              </div>
+            ) : lastetSaker ? (
+              <div>
+                {(søk || partiFilter !== 'alle') && (
+                  <div className="sticky top-0 bg-blue-50 border-b border-blue-100 px-4 py-2 flex items-center gap-2 z-10">
+                    <span className="text-xs text-blue-600">
+                      {filtrerteSaker.reduce((s, sk) => s + sk.innlegg.length, 0)} innlegg vises
+                    </span>
+                    <button onClick={() => { setSøk(''); setPartiFilter('alle'); }}
+                      className="text-xs text-blue-500 hover:text-blue-700 ml-auto">
+                      Nullstill ✕
+                    </button>
+                  </div>
+                )}
+                <SakInnleggListe saker={filtrerteSaker} repsMap={repsMap} onVelgRep={onVelgRep} søk={søk} />
+              </div>
+            ) : null
+          ) : (
+            valgtRep && indeks ? (
+              <TalerRepAktivitetDetalj rep={valgtRep} indeks={indeks} onVelgRep={onVelgRep} />
+            ) : valgtSakId && indeks ? (
+              <TalerSakAktivitetDetalj sakId={valgtSakId} indeks={indeks} onVelgRep={onVelgRep} />
+            ) : (
+              <div className="flex items-center justify-center h-full text-center p-8">
+                <div className="space-y-2">
+                  <p className="text-4xl">🎤</p>
+                  <p className="text-sm text-gray-500">
+                    {indeks ? 'Velg en representant eller sak til venstre' : 'Klikk "Analyser alle talere" for å bygge aktivitetsindeks'}
+                  </p>
+                  {indeks && <p className="text-xs text-gray-400">{indeks.repTotaler.size} representanter lastet</p>}
+                </div>
+              </div>
+            )
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // SEKSJON 12: APP — rotnivå med navigasjon
 // ═══════════════════════════════════════════════════════════════
 const NAV_ITEMS = [
@@ -3569,6 +4235,7 @@ const NAV_ITEMS = [
   { id: 'representanter',  label: 'Representanter'     },
   { id: 'partier',         label: 'Partier'            },
   { id: 'sporsmal',        label: 'Spørsmål'           },
+  { id: 'taler',           label: 'Taler'              },
 ];
 
 function App() {
@@ -3659,6 +4326,7 @@ function App() {
         {view === 'representanter' && <RepresentanterVisning  sesjonId={sesjonId} jumpTil={jumpTilRep} />}
         {view === 'partier'        && <PartierVisning          sesjonId={sesjonId} onVelgRep={handleVelgRep} />}
         {view === 'sporsmal'       && <SporsmalVisning         sesjonId={sesjonId} jumpTil={jumpTilSporsmal} />}
+        {view === 'taler'          && <TalerVisning            sesjonId={sesjonId} onVelgRep={handleVelgRep} />}
       </div>
     </div>
   );
