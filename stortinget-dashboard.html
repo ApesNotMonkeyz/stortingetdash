@@ -3410,7 +3410,7 @@ const utvidSøk = (q) => {
   return [ql];
 };
 
-function TemaHubResultat({ resultat, onRepKlikk, onSakKlikk, onSporsmalKlikk }) {
+function TemaHubResultat({ resultat, onRepKlikk, onSakKlikk, onSporsmalKlikk, internIds }) {
   const { søkTekst, søkTermer = [søkTekst], saker, sporsmal, topReps, partier } = resultat;
   const [visMerSaker,    setVisMerSaker]    = useState(false);
   const [visMerSporsmal, setVisMerSporsmal] = useState(false);
@@ -3481,6 +3481,9 @@ function TemaHubResultat({ resultat, onRepKlikk, onSakKlikk, onSporsmalKlikk }) 
                               <StatusBadge status={s.status} />
                               {s.type && <span className="text-[11px] text-gray-400">{SAK_TYPE_MAP[s.type]||''}</span>}
                               {s.komite?.navn && <span className="text-[11px] text-gray-400">· {s.komite.navn}</span>}
+                              {internIds?.has(String(s.id)) && (
+                                <span className="text-[11px] font-semibold px-1.5 py-px rounded bg-blue-600 text-white">Internt</span>
+                              )}
                             </div>
                             {matchEmner.length > 0 && (
                               <div className="flex gap-1 mt-1.5 flex-wrap">
@@ -3659,6 +3662,7 @@ function TemaHubResultat({ resultat, onRepKlikk, onSakKlikk, onSporsmalKlikk }) 
 }
 
 function TemaHubVisning({ sesjonId, onRepKlikk, onSakKlikk, onSporsmalKlikk }) {
+  const internIds = useMemo(() => new Set(Object.keys(internDB.hentAlle())), []);
   const [søkTekst, setSøkTekst] = useState('');
   const [aktivSøk, setAktivSøk] = useState('');
   const [laster,   setLaster]   = useState(false);
@@ -3804,7 +3808,7 @@ function TemaHubVisning({ sesjonId, onRepKlikk, onSakKlikk, onSporsmalKlikk }) {
             </div>
           </div>
         )}
-        {!laster && resultat && <TemaHubResultat resultat={resultat} onRepKlikk={onRepKlikk} onSakKlikk={onSakKlikk} onSporsmalKlikk={onSporsmalKlikk} />}
+        {!laster && resultat && <TemaHubResultat resultat={resultat} onRepKlikk={onRepKlikk} onSakKlikk={onSakKlikk} onSporsmalKlikk={onSporsmalKlikk} internIds={internIds} />}
       </div>
     </div>
   );
@@ -4655,21 +4659,62 @@ function InternSakKort({ sak, valgt, onClick }) {
 
 // ── InternSakListe ────────────────────────────────────────────────
 function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlett, refresh }) {
-  const [søk,        setSøk]        = useState('');
-  const [katFilter,  setKatFilter]  = useState('alle');
-  const [priFilter,  setPriFilter]  = useState('alle');
-  const [visModal,   setVisModal]   = useState(false);
-  const [importFeil, setImportFeil] = useState(null);
+  const [søk,          setSøk]          = useState('');
+  const [katFilter,    setKatFilter]    = useState('alle');
+  const [priFilter,    setPriFilter]    = useState('alle');
+  const [sesjonFilter, setSesjonFilter] = useState('alle');
+  const [panel,        setPanel]        = useState('saker'); // 'saker' | 'ansvarlige'
+  const [visModal,     setVisModal]     = useState(false);
+  const [importFeil,   setImportFeil]   = useState(null);
   const filRef = useRef(null);
+
+  // Unike sesjoner fra sporede saker
+  const sesjoner = useMemo(() => {
+    const s = new Set(saker.map(s => s.sesjonId).filter(Boolean));
+    return [...s].sort().reverse();
+  }, [saker]);
+
+  // CSV-eksport
+  const eksporterCSV = () => {
+    const alle = Object.values(internDB.hentAlle());
+    const BOM  = '\uFEFF';
+    const hdr  = ['sakId','tittel','sesjon','ansvarlig','kategori','posisjon','prioritet',
+      'notat_status','skriftlige_innspill','utkast_1','utkast_2','utkast_3','utkast_4',
+      'utkast_5','avgivelse','debatt','antall_notater'];
+    const rader = alle.map(s => [
+      s.sakId, s.sakTittel, s.sesjonId, s.ansvarlig, s.kategori||'', s.posisjon||'',
+      s.prioritet, s.notat_status||'',
+      s.frister?.skriftlige_innspill||'',
+      s.frister?.utkast_1?.dato||'', s.frister?.utkast_2?.dato||'',
+      s.frister?.utkast_3?.dato||'', s.frister?.utkast_4?.dato||'',
+      s.frister?.utkast_5?.dato||'',
+      s.frister?.avgivelse||'', s.frister?.debatt||'',
+      (s.notater||[]).length,
+    ].map(v => `"${String(v??'').replace(/"/g,'""')}"`).join(';'));
+    const csv  = BOM + [hdr.join(';'), ...rader].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `stortinget-intern-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const filtrert = useMemo(() => {
     let res = [...saker];
+    if (sesjonFilter !== 'alle') res = res.filter(s => s.sesjonId === sesjonFilter);
     if (søk.trim()) {
       const q = søk.toLowerCase();
       res = res.filter(s =>
         (s.sakTittel  || '').toLowerCase().includes(q) ||
         (s.ansvarlig  || '').toLowerCase().includes(q) ||
-        String(s.sakId).includes(q)
+        String(s.sakId).includes(q) ||
+        (s.notater || []).some(n =>
+          (n.innhold     || '').toLowerCase().includes(q) ||
+          (n.tittel      || '').toLowerCase().includes(q) ||
+          (n.anbefaling  || '').toLowerCase().includes(q)
+        )
       );
     }
     if (katFilter !== 'alle') res = res.filter(s => s.kategori  === katFilter);
@@ -4679,7 +4724,36 @@ function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlet
       (priOrd[a.prioritet] ?? 1) - (priOrd[b.prioritet] ?? 1) ||
       (a.sakTittel || '').localeCompare(b.sakTittel || '', 'nb')
     );
-  }, [saker, søk, katFilter, priFilter]);
+  }, [saker, søk, katFilter, priFilter, sesjonFilter]);
+
+  // Ansvarlig-gruppert visning
+  const ansvarligeGrupper = useMemo(() => {
+    const map = new Map();
+    saker.forEach(s => {
+      const navn = s.ansvarlig || '(ikke tildelt)';
+      if (!map.has(navn)) map.set(navn, []);
+      map.get(navn).push(s);
+    });
+    // Sort each group by nearest upcoming deadline
+    const nesteDato = (s) => {
+      for (const fase of UTKAST_FASER) {
+        const raw = s.frister?.[fase.id];
+        const d   = fase.hasMerknad ? raw?.dato : raw;
+        if (d && new Date(d) >= new Date()) return d;
+      }
+      return '9999-99-99';
+    };
+    map.forEach((liste, k) => map.set(k, liste.sort((a, b) => nesteDato(a).localeCompare(nesteDato(b)))));
+    return [...map.entries()].sort((a, b) => {
+      if (a[0] === '(ikke tildelt)') return 1;
+      if (b[0] === '(ikke tildelt)') return -1;
+      return a[1].length - b[1].length; // mer saker øverst? nei, flest saker øverst:
+    }).sort((a, b) => {
+      if (a[0] === '(ikke tildelt)') return 1;
+      if (b[0] === '(ikke tildelt)') return -1;
+      return b[1].length - a[1].length;
+    });
+  }, [saker]);
 
   const handleImport = (e) => {
     const fil = e.target.files?.[0];
@@ -4699,57 +4773,104 @@ function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlet
       {/* Topp */}
       <div className="px-3 py-2.5 border-b border-gray-200">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-            Interne saker
-          </span>
+          {/* Panel-toggle */}
+          <div className="flex gap-1 bg-gray-100 rounded p-0.5">
+            <button onClick={() => setPanel('saker')}
+              className={`text-[11px] px-2 py-0.5 rounded font-medium transition-colors
+                ${panel === 'saker' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              Saker
+            </button>
+            <button onClick={() => setPanel('ansvarlige')}
+              className={`text-[11px] px-2 py-0.5 rounded font-medium transition-colors
+                ${panel === 'ansvarlige' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              Ansvarlige
+            </button>
+          </div>
           <button onClick={() => setVisModal(true)} title="Legg til sak"
             className="w-6 h-6 rounded bg-blue-600 text-white text-sm font-bold flex items-center justify-center hover:bg-blue-700">
             +
           </button>
         </div>
         <input value={søk} onChange={e => setSøk(e.target.value)}
-          placeholder="Søk i saker…"
+          placeholder="Søk (inkl. notatinnhold)…"
           className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-300 mb-2" />
-        <div className="flex gap-1.5">
-          <select value={katFilter} onChange={e => setKatFilter(e.target.value)}
-            className="flex-1 text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none bg-white">
-            <option value="alle">Alle kat.</option>
-            {Object.entries(INTERN_KATEGORI).map(([k]) => (
-              <option key={k} value={k}>Kat. {k}</option>
-            ))}
-          </select>
-          <select value={priFilter} onChange={e => setPriFilter(e.target.value)}
-            className="flex-1 text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none bg-white">
-            <option value="alle">Alle pri.</option>
-            {Object.entries(INTERN_PRIORITET).map(([k, v]) => (
-              <option key={k} value={k}>{v.label}</option>
-            ))}
-          </select>
-        </div>
+        {panel === 'saker' && (
+          <div className="space-y-1.5">
+            <div className="flex gap-1.5">
+              <select value={katFilter} onChange={e => setKatFilter(e.target.value)}
+                className="flex-1 text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none bg-white">
+                <option value="alle">Alle kat.</option>
+                {Object.entries(INTERN_KATEGORI).map(([k]) => (
+                  <option key={k} value={k}>Kat. {k}</option>
+                ))}
+              </select>
+              <select value={priFilter} onChange={e => setPriFilter(e.target.value)}
+                className="flex-1 text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none bg-white">
+                <option value="alle">Alle pri.</option>
+                {Object.entries(INTERN_PRIORITET).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+            </div>
+            {sesjoner.length > 1 && (
+              <select value={sesjonFilter} onChange={e => setSesjonFilter(e.target.value)}
+                className="w-full text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none bg-white">
+                <option value="alle">Alle sesjoner</option>
+                {sesjoner.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Liste */}
       <div className="flex-1 overflow-y-auto">
-        {filtrert.length === 0 && (
-          <p className="text-xs text-gray-400 p-4 text-center">
-            {saker.length === 0 ? 'Ingen saker lagt til ennå' : 'Ingen treff'}
-          </p>
+        {panel === 'saker' && (
+          <>
+            {filtrert.length === 0 && (
+              <p className="text-xs text-gray-400 p-4 text-center">
+                {saker.length === 0 ? 'Ingen saker lagt til ennå' : 'Ingen treff'}
+              </p>
+            )}
+            {filtrert.map(s => (
+              <InternSakKort key={s.sakId} sak={s} valgt={valgtSakId === s.sakId} onClick={() => onVelg(s)} />
+            ))}
+          </>
         )}
-        {filtrert.map(s => (
-          <InternSakKort key={s.sakId} sak={s} valgt={valgtSakId === s.sakId} onClick={() => onVelg(s)} />
-        ))}
+        {panel === 'ansvarlige' && (
+          <>
+            {ansvarligeGrupper.length === 0 && (
+              <p className="text-xs text-gray-400 p-4 text-center">Ingen saker ennå</p>
+            )}
+            {ansvarligeGrupper.map(([navn, liste]) => (
+              <div key={navn} className="border-b border-gray-100">
+                <div className="px-3 py-2 bg-gray-50 flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-700 truncate">{navn.split(' ')[0]}</span>
+                  <span className="text-[11px] text-gray-400 shrink-0 ml-1">{liste.length}</span>
+                </div>
+                {liste.map(s => (
+                  <InternSakKort key={s.sakId} sak={s} valgt={valgtSakId === s.sakId} onClick={() => onVelg(s)} />
+                ))}
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       {/* Bunn: eksport/import */}
       <div className="px-3 py-2 border-t border-gray-100">
-        <div className="flex gap-1.5">
+        <div className="flex gap-1">
           <button onClick={internDB.eksporter}
             className="flex-1 text-xs py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">
-            Eksporter
+            JSON
+          </button>
+          <button onClick={eksporterCSV}
+            className="flex-1 text-xs py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">
+            CSV
           </button>
           <button onClick={() => filRef.current?.click()}
             className="flex-1 text-xs py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">
-            Importer
+            Import
           </button>
           <input ref={filRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
         </div>
@@ -4877,6 +4998,99 @@ function InternFristerFane({ sak, oppdater }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ── InternVoteringsutfall ─────────────────────────────────────────
+function InternVoteringsutfall({ sakId, posisjon, ansvarlig }) {
+  const [utfall,  setUtfall]  = useState(null); // null | { parti, for, mot, samsvar }
+  const [laster,  setLaster]  = useState(false);
+  const [feil,    setFeil]    = useState(null);
+
+  const { data: repsData } = useData(() => API.dagensRepresentanter(), []);
+  // Finn parti fra ansvarlig-rep
+  const partiId = useMemo(() => {
+    if (!ansvarlig || !repsData) return null;
+    const reps  = parse.representanter(repsData);
+    const match = reps.find(r =>
+      [r.fornavn, r.etternavn].filter(Boolean).join(' ').toLowerCase() === ansvarlig.toLowerCase()
+    );
+    return match?.parti?.id || null;
+  }, [repsData, ansvarlig]);
+
+  const sjekkUtfall = async () => {
+    setLaster(true); setFeil(null); setUtfall(null);
+    try {
+      const votData  = await API.voteringer(sakId);
+      const votListe = parse.voteringer(votData);
+      if (!votListe.length) { setFeil('Ingen voteringer funnet for denne saken'); setLaster(false); return; }
+      // Ta siste votering
+      const sisteVot = votListe[votListe.length - 1];
+      const vId = sisteVot.votering_id || sisteVot.id;
+      const resData = await API.voteringsresultat(vId);
+      const totaler = parse.partiTotaler(parse.voteringsresultat(resData));
+      const vedtatt = totaler.reduce((s, p) => s + p.for, 0) > totaler.reduce((s, p) => s + p.mot, 0);
+
+      let partiResult = null;
+      if (partiId) {
+        partiResult = totaler.find(p => p.id === partiId);
+      }
+      const partiStøttet = partiResult ? partiResult.for > partiResult.mot : null;
+      const positivPos   = posisjon === 'støtte' || posisjon === 'støtte_merknad';
+      const samsvar = partiStøttet !== null
+        ? (positivPos === partiStøttet)
+        : (positivPos === vedtatt);
+
+      setUtfall({ vedtatt, partiResult, partiId, samsvar, sisteVot });
+    } catch (e) { setFeil(e.message); }
+    setLaster(false);
+  };
+
+  const posInfo = INTERN_POSISJON[posisjon];
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Voteringsutfall</label>
+        {!utfall && (
+          <button onClick={sjekkUtfall} disabled={laster}
+            className="text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50">
+            {laster ? 'Sjekker…' : 'Sjekk siste votering'}
+          </button>
+        )}
+        {utfall && (
+          <button onClick={() => setUtfall(null)} className="text-xs text-gray-400 hover:text-gray-600">Nullstill</button>
+        )}
+      </div>
+      {feil && <p className="text-xs text-red-500">{feil}</p>}
+      {!utfall && !feil && !laster && (
+        <p className="text-xs text-gray-400">
+          Intern posisjon: <span className="font-medium" style={{ color: posInfo?.farge }}>{posInfo?.label}</span>
+          {' · '}Klikk for å sjekke faktisk utfall
+        </p>
+      )}
+      {utfall && (
+        <div className={`rounded-lg px-3 py-2.5 border ${utfall.samsvar ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+          <div className="flex items-center gap-2">
+            <span className="text-base">{utfall.samsvar ? '✓' : '✗'}</span>
+            <div>
+              <p className={`text-sm font-semibold ${utfall.samsvar ? 'text-green-800' : 'text-red-800'}`}>
+                {utfall.samsvar ? 'Samsvar med posisjon' : 'Avvik fra posisjon'}
+              </p>
+              <p className="text-xs text-gray-600">
+                Vedtatt: <span className="font-medium">{utfall.vedtatt ? 'For' : 'Mot'}</span>
+                {utfall.partiResult && utfall.partiId && (
+                  <> · {utfall.partiId}: <span className="font-medium">
+                    {utfall.partiResult.for > utfall.partiResult.mot ? 'For' : 'Mot'}
+                  </span></>
+                )}
+                {' · '}<span className="text-gray-400">Din posisjon: {posInfo?.label}</span>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -5039,6 +5253,11 @@ function InternOversiktFane({ sak, oppdater }) {
           ))}
         </div>
       </div>
+
+      {/* Voteringsutfall */}
+      {sak.posisjon && (
+        <InternVoteringsutfall sakId={sak.sakId} posisjon={sak.posisjon} ansvarlig={sak.ansvarlig} />
+      )}
 
       {/* Behandlingsinstanser */}
       <div>
@@ -5492,6 +5711,165 @@ function InternSakDetalj({ sak, oppdater, onSlett }) {
   );
 }
 
+// ── InternDashboard ───────────────────────────────────────────────
+function InternDashboard({ saker, onVelg }) {
+  const iDag = new Date();
+
+  // Neste frister (alle saker × alle faser, kun fremtidige)
+  const nesteFrister = useMemo(() => {
+    const liste = [];
+    saker.forEach(s => {
+      UTKAST_FASER.forEach(fase => {
+        const raw  = s.frister?.[fase.id];
+        const dato = fase.hasMerknad ? (raw?.dato || '') : (raw || '');
+        if (!dato) return;
+        const d = new Date(dato);
+        if (d >= iDag) liste.push({ sak: s, fase, dato, d });
+      });
+    });
+    return liste.sort((a, b) => a.d - b.d).slice(0, 6);
+  }, [saker]);
+
+  const rødeFrister = useMemo(() =>
+    saker.filter(s => UTKAST_FASER.some(fase => {
+      const raw  = s.frister?.[fase.id];
+      const dato = fase.hasMerknad ? (raw?.dato || '') : (raw || '');
+      if (!dato) return false;
+      return new Date(dato) < iDag;
+    })), [saker]);
+
+  // Telle per kategori og posisjon
+  const katTelling = useMemo(() => {
+    const t = {};
+    saker.forEach(s => { if (s.kategori) t[s.kategori] = (t[s.kategori] || 0) + 1; });
+    return t;
+  }, [saker]);
+
+  const posTelling = useMemo(() => {
+    const t = {};
+    saker.forEach(s => { if (s.posisjon) t[s.posisjon] = (t[s.posisjon] || 0) + 1; });
+    return t;
+  }, [saker]);
+
+  const avventeSaker = (posTelling['avvente'] || 0);
+  const ferdigNotat  = saker.filter(s => s.notat_status === 'ferdig').length;
+
+  if (saker.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-center text-gray-400 max-w-xs">
+          <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center mx-auto mb-3">
+            <span className="text-gray-500 font-bold text-lg">+</span>
+          </div>
+          <p className="text-sm font-medium text-gray-600">Ingen interne saker ennå</p>
+          <p className="text-xs mt-1">Klikk + for å legge til en sak fra Stortinget</p>
+        </div>
+      </div>
+    );
+  }
+
+  const maks = Math.max(...Object.values({ ...katTelling, ...posTelling }), 1);
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-gray-50 p-5">
+      <div className="max-w-2xl space-y-4">
+
+        {/* Sammendragsrad */}
+        <div className="grid grid-cols-4 gap-3">
+          {[
+            { n: saker.length,      lbl: 'Saker sporet',   farge: '#3b82f6' },
+            { n: rødeFrister.length, lbl: 'Røde frister',   farge: '#ef4444' },
+            { n: avventeSaker,       lbl: 'Avventer',        farge: '#f59e0b' },
+            { n: ferdigNotat,        lbl: 'Notat ferdig',   farge: '#22c55e' },
+          ].map(({ n, lbl, farge }) => (
+            <div key={lbl} className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
+              <p className="text-2xl font-bold leading-none" style={{ color: farge }}>{n}</p>
+              <p className="text-[11px] text-gray-400 mt-1">{lbl}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Neste frister */}
+        {nesteFrister.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-gray-100">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Neste frister</h3>
+            </div>
+            <div className="divide-y divide-gray-50">
+              {nesteFrister.map(({ sak, fase, dato }) => (
+                <button key={`${sak.sakId}-${fase.id}`} onClick={() => onVelg(sak)}
+                  className="w-full text-left px-4 py-2.5 flex items-center gap-3 hover:bg-blue-50 transition-colors">
+                  <FristDot dato={dato} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-800 truncate">{sak.sakTittel}</p>
+                    <p className="text-[11px] text-gray-400">{fase.alias || fase.label}</p>
+                  </div>
+                  <DagerTil dato={dato} />
+                  <span className="text-[11px] text-gray-300">
+                    {new Date(dato).toLocaleDateString('nb-NO', { day: 'numeric', month: 'short' })}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Kategori + Posisjon */}
+        <div className="grid grid-cols-2 gap-3">
+          {/* Kategori */}
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Kategori</h3>
+            <div className="space-y-2">
+              {Object.entries(INTERN_KATEGORI).map(([k, v]) => {
+                const n = katTelling[k] || 0;
+                return (
+                  <div key={k}>
+                    <div className="flex justify-between text-xs mb-0.5">
+                      <span className="font-medium" style={{ color: v.farge }}>{v.label}</span>
+                      <span className="text-gray-400">{n}</span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${n / maks * 100}%`, background: v.farge }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {Object.keys(katTelling).length === 0 && (
+                <p className="text-xs text-gray-400">Ingen kategorier satt</p>
+              )}
+            </div>
+          </div>
+
+          {/* Posisjon */}
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Posisjon</h3>
+            <div className="space-y-2">
+              {Object.entries(INTERN_POSISJON).map(([k, v]) => {
+                const n = posTelling[k] || 0;
+                return (
+                  <div key={k}>
+                    <div className="flex justify-between text-xs mb-0.5">
+                      <span className="font-medium" style={{ color: v.farge }}>{v.label}</span>
+                      <span className="text-gray-400">{n}</span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${n / maks * 100}%`, background: v.farge }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {Object.keys(posTelling).length === 0 && (
+                <p className="text-xs text-gray-400">Ingen posisjoner satt</p>
+              )}
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
 // ── InternVisning ─────────────────────────────────────────────────
 function InternVisning({ sesjonId }) {
   const { saker, oppdater, slettSak, refresh } = useInternDB();
@@ -5535,15 +5913,7 @@ function InternVisning({ sesjonId }) {
           onSlett={handleSlett}
         />
       ) : (
-        <div className="flex-1 flex items-center justify-center bg-gray-50">
-          <div className="text-center text-gray-400">
-            <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center mx-auto mb-3">
-              <span className="text-gray-500 font-bold text-lg">+</span>
-            </div>
-            <p className="text-sm font-medium text-gray-600">Velg en sak fra listen</p>
-            <p className="text-xs mt-1">eller legg til en ny sak med + knappen</p>
-          </div>
-        </div>
+        <InternDashboard saker={saker} onVelg={s => setValgtSak(internDB.hent(s.sakId) || s)} />
       )}
     </div>
   );
