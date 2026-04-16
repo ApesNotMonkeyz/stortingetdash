@@ -5275,8 +5275,12 @@ function InternVoteringFane({ sak, oppdater }) {
 
   const lastForslag = async (vId) => {
     setLasterForslag(p => ({ ...p, [vId]: true }));
-    try { setApiForslag(p => ({ ...p, [vId]: parse.voteringsforslag(await API.voteringsforslag(vId)) })); }
-    catch { setApiForslag(p => ({ ...p, [vId]: [] })); }
+    try {
+      const data = await API.voteringsforslag(vId);
+      setApiForslag(p => ({ ...p, [vId]: parse.voteringsforslag(data) }));
+    } catch {
+      setApiForslag(p => ({ ...p, [vId]: [] }));
+    }
     setLasterForslag(p => ({ ...p, [vId]: false }));
   };
 
