@@ -4760,6 +4760,399 @@ function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlet
   );
 }
 
+// ── Hjelpere for frister ─────────────────────────────────────────
+function FristDot({ dato }) {
+  if (!dato) return <span className="w-2.5 h-2.5 rounded-full bg-gray-200 shrink-0" title="Ikke satt" />;
+  const dager = Math.ceil((new Date(dato) - new Date()) / 86400000);
+  let farge = '#22c55e';
+  if (dager < 0)      farge = '#ef4444';
+  else if (dager < 7) farge = '#f59e0b';
+  const tittel = dager < 0
+    ? `Passert (${Math.abs(dager)} dager siden)`
+    : `${dager} dager igjen`;
+  return <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: farge }} title={tittel} />;
+}
+
+function DagerTil({ dato }) {
+  if (!dato) return null;
+  const dager = Math.ceil((new Date(dato) - new Date()) / 86400000);
+  let cls = 'text-green-600';
+  const tekst = dager < 0 ? `${Math.abs(dager)}d siden` : `${dager}d`;
+  if (dager < 0)      cls = 'text-red-500';
+  else if (dager < 7) cls = 'text-yellow-600';
+  return <span className={`text-[11px] font-medium tabular-nums ${cls}`}>{tekst}</span>;
+}
+
+const MERKNAD_VERDIER = [
+  { id: null,           label: '—'            },
+  { id: 'ikke_merknad', label: 'Ikke merknad' },
+  { id: 'påbegynt',     label: 'Påbegynt'     },
+  { id: 'innlevert',    label: 'Innlevert'    },
+];
+
+// ── InternFristerFane ─────────────────────────────────────────────
+function InternFristerFane({ sak, oppdater }) {
+  const frister = sak.frister || {};
+
+  const oppdaterDato = (faseId, verdi) => {
+    const fase = UTKAST_FASER.find(f => f.id === faseId);
+    const nyeFrister = { ...frister };
+    if (fase?.hasMerknad) {
+      nyeFrister[faseId] = { ...(nyeFrister[faseId] || {}), dato: verdi };
+    } else {
+      nyeFrister[faseId] = verdi;
+    }
+    oppdater(sak.sakId, { ...sak, frister: nyeFrister });
+  };
+
+  const oppdaterMerknad = (faseId, merknad) => {
+    const nyeFrister = { ...frister };
+    nyeFrister[faseId] = { ...(nyeFrister[faseId] || {}), merknad };
+    oppdater(sak.sakId, { ...sak, frister: nyeFrister });
+  };
+
+  // Neste frist som ikke er passert (for oppsummering)
+  const nesteFrist = useMemo(() => {
+    const iDag = new Date();
+    for (const fase of UTKAST_FASER) {
+      const raw  = frister[fase.id];
+      const dato = fase.hasMerknad ? (raw?.dato || '') : (raw || '');
+      if (dato && new Date(dato) >= iDag) return { label: fase.alias || fase.label, dato };
+    }
+    return null;
+  }, [frister]);
+
+  return (
+    <div className="p-5 max-w-2xl">
+      {nesteFrist && (
+        <div className="mb-4 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 text-sm text-blue-700">
+          Neste frist: <span className="font-semibold">{nesteFrist.label}</span>
+          {' – '}{new Date(nesteFrist.dato).toLocaleDateString('nb-NO', { day: 'numeric', month: 'long' })}
+        </div>
+      )}
+
+      <div className="border border-gray-200 rounded-xl overflow-hidden divide-y divide-gray-100">
+        {UTKAST_FASER.map(fase => {
+          const raw     = frister[fase.id];
+          const dato    = fase.hasMerknad ? (raw?.dato || '') : (raw || '');
+          const merknad = fase.hasMerknad ? (raw?.merknad ?? null) : null;
+
+          return (
+            <div key={fase.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors">
+              <FristDot dato={dato} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-800">
+                  {fase.label}
+                  {fase.alias && (
+                    <span className="ml-1.5 text-[11px] text-gray-400">({fase.alias})</span>
+                  )}
+                </p>
+                {fase.hasMerknad && (
+                  <div className="flex gap-1.5 mt-1 flex-wrap">
+                    {MERKNAD_VERDIER.map(mv => (
+                      <button key={String(mv.id)} onMouseDown={e => { e.preventDefault(); oppdaterMerknad(fase.id, mv.id); }}
+                        className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors
+                          ${merknad === mv.id
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'border-gray-200 text-gray-500 hover:bg-gray-100'}`}>
+                        {mv.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <DagerTil dato={dato} />
+              <input type="date" value={dato} onChange={e => oppdaterDato(fase.id, e.target.value)}
+                className="text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-300 w-36" />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── InternOversiktFane ────────────────────────────────────────────
+function InternOversiktFane({ sak, oppdater }) {
+  const [ansvarlig,       setAnsvarlig]       = useState(sak.ansvarlig || '');
+  const [forslagListe,    setForslagListe]    = useState([]);
+  const [visForslagListe, setVisForslagListe] = useState(false);
+
+  const { data: repsData } = useData(() => API.dagensRepresentanter(), []);
+  const navnListe = useMemo(() => {
+    const reps = parse.representanter(repsData);
+    return reps.map(r => [r.fornavn, r.etternavn].filter(Boolean).join(' ')).sort();
+  }, [repsData]);
+
+  // Synkroniser lokal ansvarlig-state med ny sak
+  useEffect(() => { setAnsvarlig(sak.ansvarlig || ''); }, [sak.sakId]);
+
+  const oppdaterFelt = (felt, verdi) => oppdater(sak.sakId, { ...sak, [felt]: verdi });
+
+  const filtrerForslag = (v) => {
+    setAnsvarlig(v);
+    if (v.trim().length < 2) { setForslagListe([]); setVisForslagListe(false); return; }
+    const q = v.toLowerCase();
+    setForslagListe(navnListe.filter(n => n.toLowerCase().includes(q)).slice(0, 8));
+    setVisForslagListe(true);
+  };
+
+  const velgNavn = (navn) => {
+    setAnsvarlig(navn);
+    setForslagListe([]);
+    setVisForslagListe(false);
+    oppdaterFelt('ansvarlig', navn);
+  };
+
+  // Behandlingsinstanser
+  const instanser = sak.instanser || [];
+
+  const leggTilInstans = () => oppdater(sak.sakId, {
+    ...sak,
+    instanser: [...instanser, { id: String(Date.now()), type: 'FM', dato: '', avgjort: false }],
+  });
+
+  const oppdaterInstans = (idx, felt, verdi) => {
+    const ny = instanser.map((ins, i) => i === idx ? { ...ins, [felt]: verdi } : ins);
+    oppdater(sak.sakId, { ...sak, instanser: ny });
+  };
+
+  const slettInstans = (idx) =>
+    oppdater(sak.sakId, { ...sak, instanser: instanser.filter((_, i) => i !== idx) });
+
+  return (
+    <div className="p-5 space-y-6 max-w-2xl">
+
+      {/* Ansvarlig (autocomplete) */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+          Ansvarlig saksordfører
+        </label>
+        <div className="relative">
+          <input value={ansvarlig} onChange={e => filtrerForslag(e.target.value)}
+            onFocus={() => ansvarlig.length >= 2 && setVisForslagListe(true)}
+            onBlur={() => { setTimeout(() => setVisForslagListe(false), 150); oppdaterFelt('ansvarlig', ansvarlig); }}
+            placeholder="Søk på navn…"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+          {visForslagListe && forslagListe.length > 0 && (
+            <div className="absolute z-20 top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg mt-0.5 overflow-hidden">
+              {forslagListe.map(n => (
+                <button key={n} onMouseDown={() => velgNavn(n)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 border-b border-gray-50 last:border-0">
+                  {n}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Kategori + Posisjon + Prioritet */}
+      <div className="grid grid-cols-3 gap-4">
+        {/* Kategori */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Kategori</label>
+          <div className="flex flex-col gap-1">
+            <button onClick={() => oppdaterFelt('kategori', null)}
+              className={`px-2.5 py-1.5 rounded text-xs font-medium border transition-colors text-left
+                ${!sak.kategori
+                  ? 'bg-gray-100 border-gray-300 text-gray-700'
+                  : 'border-gray-200 text-gray-400 hover:bg-gray-50'}`}>
+              Ikke satt
+            </button>
+            {Object.entries(INTERN_KATEGORI).map(([k, v]) => (
+              <button key={k} onClick={() => oppdaterFelt('kategori', k)}
+                className={`px-2.5 py-1.5 rounded text-xs font-medium border transition-colors text-left
+                  ${sak.kategori === k ? 'text-white border-transparent' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                style={sak.kategori === k ? { background: v.farge } : {}}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Posisjon */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Posisjon</label>
+          <div className="flex flex-col gap-1">
+            <button onClick={() => oppdaterFelt('posisjon', null)}
+              className={`px-2.5 py-1.5 rounded text-xs font-medium border transition-colors text-left
+                ${!sak.posisjon
+                  ? 'bg-gray-100 border-gray-300 text-gray-700'
+                  : 'border-gray-200 text-gray-400 hover:bg-gray-50'}`}>
+              Ikke satt
+            </button>
+            {Object.entries(INTERN_POSISJON).map(([k, v]) => (
+              <button key={k} onClick={() => oppdaterFelt('posisjon', k)}
+                className={`px-2.5 py-1.5 rounded text-xs font-medium border transition-colors text-left
+                  ${sak.posisjon === k ? 'text-white border-transparent' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                style={sak.posisjon === k ? { background: v.farge } : {}}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Prioritet */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Prioritet</label>
+          <div className="flex flex-col gap-1">
+            {Object.entries(INTERN_PRIORITET).map(([k, v]) => (
+              <button key={k} onClick={() => oppdaterFelt('prioritet', k)}
+                className={`px-2.5 py-1.5 rounded text-xs font-medium border transition-colors text-left
+                  ${sak.prioritet === k ? 'text-white border-transparent' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                style={sak.prioritet === k ? { background: v.farge } : {}}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Notatstatus */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Notatstatus</label>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => oppdaterFelt('notat_status', null)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors
+              ${!sak.notat_status
+                ? 'bg-gray-100 border-gray-300 text-gray-700'
+                : 'border-gray-200 text-gray-400 hover:bg-gray-50'}`}>
+            Ikke satt
+          </button>
+          {Object.entries(INTERN_NOTAT_STATUS).map(([k, v]) => (
+            <button key={k} onClick={() => oppdaterFelt('notat_status', k)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors
+                ${sak.notat_status === k ? 'text-white border-transparent' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+              style={sak.notat_status === k ? { background: v.farge } : {}}>
+              {v.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Behandlingsinstanser */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Behandlingsinstanser</label>
+          <button onClick={leggTilInstans} className="text-xs text-blue-600 hover:text-blue-800 font-medium">
+            + Legg til
+          </button>
+        </div>
+        {instanser.length === 0 && (
+          <p className="text-xs text-gray-400">Ingen instanser registrert ennå</p>
+        )}
+        <div className="space-y-2">
+          {instanser.map((ins, idx) => (
+            <div key={ins.id || idx} className="flex items-center gap-2 p-2.5 rounded-lg bg-gray-50 border border-gray-100">
+              <select value={ins.type} onChange={e => oppdaterInstans(idx, 'type', e.target.value)}
+                className="text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none bg-white font-semibold w-14">
+                <option value="FM">FM</option>
+                <option value="GSM">GSM</option>
+                <option value="GM">GM</option>
+              </select>
+              <input type="date" value={ins.dato} onChange={e => oppdaterInstans(idx, 'dato', e.target.value)}
+                className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-300" />
+              <label className="flex items-center gap-1 text-xs text-gray-600 cursor-pointer whitespace-nowrap">
+                <input type="checkbox" checked={!!ins.avgjort}
+                  onChange={e => oppdaterInstans(idx, 'avgjort', e.target.checked)}
+                  className="rounded" />
+                Avgjort
+              </label>
+              <button onClick={() => slettInstans(idx)} className="text-gray-400 hover:text-red-500 text-lg leading-none">&times;</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── InternSakDetalj ───────────────────────────────────────────────
+const DETALJ_FANER = [
+  { id: 'oversikt', label: 'Oversikt' },
+  { id: 'frister',  label: 'Frister'  },
+  { id: 'notater',  label: 'Notater'  },
+  { id: 'votering', label: 'Votering' },
+];
+
+function InternSakDetalj({ sak, oppdater, onSlett }) {
+  const [aktivFane, setAktivFane] = useState('oversikt');
+
+  // Bytt til oversikt når ny sak velges
+  useEffect(() => { setAktivFane('oversikt'); }, [sak.sakId]);
+
+  const kat = sak.kategori ? INTERN_KATEGORI[sak.kategori] : null;
+  const pos = sak.posisjon ? INTERN_POSISJON[sak.posisjon] : null;
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden bg-white">
+      {/* Header */}
+      <div className="px-6 pt-5 pb-0 border-b border-gray-200 shrink-0">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <span className="text-xs text-gray-400">Sak {sak.sakId}</span>
+              {sak.sesjonId && <span className="text-xs text-gray-400">· {sak.sesjonId}</span>}
+              {kat && (
+                <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded"
+                  style={{ background: `${kat.farge}22`, color: kat.farge }}>
+                  {kat.label}
+                </span>
+              )}
+              {pos && (
+                <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded text-white"
+                  style={{ background: pos.farge }}>
+                  {pos.label}
+                </span>
+              )}
+            </div>
+            <h2 className="text-base font-semibold text-gray-900 leading-snug">{sak.sakTittel}</h2>
+            {sak.ansvarlig && (
+              <p className="text-xs text-gray-500 mt-1">Ansvarlig: {sak.ansvarlig}</p>
+            )}
+          </div>
+          <button
+            onClick={() => { if (window.confirm(`Slette "${sak.sakTittel}" fra interne saker?`)) onSlett(sak.sakId); }}
+            className="text-xs text-gray-400 hover:text-red-500 shrink-0 transition-colors mt-1">
+            Slett
+          </button>
+        </div>
+
+        {/* Fane-nav */}
+        <div className="flex gap-0">
+          {DETALJ_FANER.map(f => (
+            <button key={f.id} onClick={() => setAktivFane(f.id)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors
+                ${aktivFane === f.id
+                  ? 'border-blue-600 text-blue-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              {f.label}
+              {f.id === 'notater' && (sak.notater?.length > 0) && (
+                <span className="ml-1.5 text-[10px] bg-blue-100 text-blue-600 rounded-full px-1.5 py-px">
+                  {sak.notater.length}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Fane-innhold */}
+      <div className="flex-1 overflow-y-auto">
+        {aktivFane === 'oversikt' && <InternOversiktFane sak={sak} oppdater={oppdater} />}
+        {aktivFane === 'frister'  && <InternFristerFane  sak={sak} oppdater={oppdater} />}
+        {aktivFane === 'notater'  && (
+          <p className="p-6 text-sm text-gray-400 text-center">Notater implementeres i steg 3</p>
+        )}
+        {aktivFane === 'votering' && (
+          <p className="p-6 text-sm text-gray-400 text-center">Voteringsforslag implementeres i steg 3</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── InternVisning ─────────────────────────────────────────────────
 function InternVisning({ sesjonId }) {
   const { saker, oppdater, slettSak, refresh } = useInternDB();
@@ -4795,27 +5188,24 @@ function InternVisning({ sesjonId }) {
         refresh={refresh}
       />
 
-      {/* Høyre panel — detaljvisning implementeres i steg 2 */}
-      <div className="flex-1 overflow-y-auto flex items-center justify-center bg-gray-50">
-        {valgtSak ? (
-          <div className="text-center max-w-sm p-6">
-            <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center mx-auto mb-3">
-              <span className="text-blue-600 font-bold text-lg">ST</span>
-            </div>
-            <p className="font-semibold text-gray-800 mb-1 line-clamp-3">{valgtSak.sakTittel}</p>
-            <p className="text-sm text-gray-400">Sak {valgtSak.sakId}</p>
-            <p className="text-xs text-gray-400 mt-3">Detaljvisning med frister og notater kommer i neste steg</p>
-          </div>
-        ) : (
+      {/* Høyre panel */}
+      {valgtSak ? (
+        <InternSakDetalj
+          sak={valgtSak}
+          oppdater={oppdater}
+          onSlett={handleSlett}
+        />
+      ) : (
+        <div className="flex-1 flex items-center justify-center bg-gray-50">
           <div className="text-center text-gray-400">
             <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center mx-auto mb-3">
-              <span className="text-gray-400 font-bold">+</span>
+              <span className="text-gray-500 font-bold text-lg">+</span>
             </div>
             <p className="text-sm font-medium text-gray-600">Velg en sak fra listen</p>
             <p className="text-xs mt-1">eller legg til en ny sak med + knappen</p>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
