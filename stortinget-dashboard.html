@@ -977,7 +977,7 @@ function SakDetalj({ sakId, onLukk }) {
 // ═══════════════════════════════════════════════════════════════
 // SEKSJON 7: SAKSLISTE (Fase 1)
 // ═══════════════════════════════════════════════════════════════
-function SakKort({ sak, valgt, onClick, matchendeEmner }) {
+function SakKort({ sak, valgt, onClick, matchendeEmner, erIntern }) {
   return (
     <button onClick={onClick}
       className={`w-full text-left px-4 py-3.5 border-b border-gray-100 transition-colors ${
@@ -998,6 +998,11 @@ function SakKort({ sak, valgt, onClick, matchendeEmner }) {
         {sak.komite?.navn && (
           <span className="text-[11px] text-gray-400 truncate">· {sak.komite.navn}</span>
         )}
+        {erIntern && (
+          <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-600 text-white ml-auto shrink-0">
+            Internt
+          </span>
+        )}
       </div>
       {/* Vis matchende emneord når søk er aktivt */}
       {matchendeEmner?.length > 0 && (
@@ -1017,6 +1022,9 @@ function SakKort({ sak, valgt, onClick, matchendeEmner }) {
 function SakerVisning({ sesjonId, jumpTil }) {
   const [valgtSakId, setValgtSakId] = useState(null);
   useEffect(() => { if (jumpTil?.id) setValgtSakId(jumpTil.id); }, [jumpTil]);
+
+  // Les internDB én gang ved mount for å vise badge på sporede saker
+  const internIds = useMemo(() => new Set(Object.keys(internDB.hentAlle())), []);
   const [søk,          setSøk]          = useState('');
   const [statusFilter, setStatusFilter] = useState('alle');
   const [typeFilter,   setTypeFilter]   = useState('alle');
@@ -1159,6 +1167,7 @@ function SakerVisning({ sesjonId, jumpTil }) {
           <SakKort key={sak.id} sak={sak}
             valgt={String(sak.id) === String(valgtSakId)}
             matchendeEmner={matchendeEmner}
+            erIntern={internIds.has(String(sak.id))}
             onClick={() => setValgtSakId(sak.id)} />
         ))}
       </div>
@@ -5068,6 +5077,336 @@ function InternOversiktFane({ sak, oppdater }) {
   );
 }
 
+// ── Notater ───────────────────────────────────────────────────────
+const NOTAT_TYPER = [
+  { id: 'internt',   label: 'Internt notat'    },
+  { id: 'innspill',  label: 'Eksternt innspill' },
+  { id: 'utredning', label: 'Utredning'         },
+  { id: 'høring',    label: 'Høring'            },
+];
+
+function NotatKort({ notat, onOppdater, onSlett }) {
+  const [ekspandert, setEkspandert] = useState(false);
+  const [redigerer,  setRedigerer]  = useState(false);
+  const [draft, setDraft] = useState({ ...notat });
+
+  useEffect(() => { setDraft({ ...notat }); setRedigerer(false); }, [notat.id]);
+
+  const typeInfo = NOTAT_TYPER.find(t => t.id === notat.type) || NOTAT_TYPER[0];
+
+  const lagre = () => { onOppdater({ ...draft }); setRedigerer(false); setEkspandert(true); };
+
+  if (redigerer) {
+    return (
+      <div className="border border-blue-200 rounded-xl bg-blue-50 p-4 space-y-3">
+        <div className="flex gap-2">
+          <input value={draft.tittel} onChange={e => setDraft(d => ({ ...d, tittel: e.target.value }))}
+            placeholder="Tittel…"
+            className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+          <select value={draft.type} onChange={e => setDraft(d => ({ ...d, type: e.target.value }))}
+            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none bg-white">
+            {NOTAT_TYPER.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        </div>
+        <textarea value={draft.innhold} onChange={e => setDraft(d => ({ ...d, innhold: e.target.value }))}
+          rows={5} placeholder="Innhold…"
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" />
+        <textarea value={draft.anbefaling} onChange={e => setDraft(d => ({ ...d, anbefaling: e.target.value }))}
+          rows={2} placeholder="Anbefaling (valgfritt)…"
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" />
+        <div className="flex gap-2 justify-end">
+          <button onClick={() => setRedigerer(false)}
+            className="px-3 py-1.5 text-xs rounded border border-gray-200 text-gray-600 hover:bg-gray-100">
+            Avbryt
+          </button>
+          <button onClick={lagre}
+            className="px-3 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-700 font-medium">
+            Lagre
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border border-gray-100 rounded-xl bg-white hover:border-gray-200 transition-colors">
+      <button onClick={() => setEkspandert(e => !e)}
+        className="w-full text-left px-4 py-3 flex items-center gap-2">
+        <span className="text-[11px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded shrink-0">
+          {typeInfo.label}
+        </span>
+        <span className="text-sm font-medium text-gray-800 flex-1 truncate">
+          {notat.tittel || '(uten tittel)'}
+        </span>
+        {notat.dato && <span className="text-[11px] text-gray-400 shrink-0">{notat.dato}</span>}
+        <span className="text-gray-400 text-xs ml-1">{ekspandert ? '▲' : '▼'}</span>
+      </button>
+      {ekspandert && (
+        <div className="px-4 pb-4 space-y-3">
+          {notat.innhold && (
+            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{notat.innhold}</p>
+          )}
+          {notat.anbefaling && (
+            <div className="rounded-lg bg-green-50 border border-green-100 px-3 py-2">
+              <p className="text-xs font-semibold text-green-700 mb-0.5">Anbefaling</p>
+              <p className="text-sm text-green-800 whitespace-pre-wrap">{notat.anbefaling}</p>
+            </div>
+          )}
+          <div className="flex gap-3 justify-end pt-1">
+            <button onClick={() => setRedigerer(true)}
+              className="text-xs text-blue-600 hover:text-blue-800 font-medium">
+              Rediger
+            </button>
+            <button onClick={() => { if (window.confirm('Slette dette notatet?')) onSlett(notat.id); }}
+              className="text-xs text-red-400 hover:text-red-600">
+              Slett
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InternNotatFane({ sak, oppdater }) {
+  const notater = sak.notater || [];
+  const [leggerTil, setLeggerTil] = useState(false);
+  const [nytt, setNytt] = useState({ tittel: '', type: 'internt', innhold: '', anbefaling: '' });
+
+  const leggTil = () => {
+    if (!nytt.innhold.trim() && !nytt.tittel.trim()) return;
+    const notat = { ...nytt, id: String(Date.now()), dato: new Date().toISOString().slice(0, 10) };
+    oppdater(sak.sakId, { ...sak, notater: [notat, ...notater] });
+    setNytt({ tittel: '', type: 'internt', innhold: '', anbefaling: '' });
+    setLeggerTil(false);
+  };
+
+  const oppdaterNotat = (id, data) =>
+    oppdater(sak.sakId, { ...sak, notater: notater.map(n => n.id === id ? { ...n, ...data } : n) });
+
+  const slettNotat = (id) =>
+    oppdater(sak.sakId, { ...sak, notater: notater.filter(n => n.id !== id) });
+
+  return (
+    <div className="p-5 max-w-2xl space-y-4">
+      {leggerTil ? (
+        <div className="border border-blue-200 rounded-xl bg-blue-50 p-4 space-y-3">
+          <div className="flex gap-2">
+            <input value={nytt.tittel} onChange={e => setNytt(n => ({ ...n, tittel: e.target.value }))}
+              autoFocus placeholder="Tittel…"
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+            <select value={nytt.type} onChange={e => setNytt(n => ({ ...n, type: e.target.value }))}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none bg-white">
+              {NOTAT_TYPER.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+          </div>
+          <textarea value={nytt.innhold} onChange={e => setNytt(n => ({ ...n, innhold: e.target.value }))}
+            rows={5} placeholder="Innhold…"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" />
+          <textarea value={nytt.anbefaling} onChange={e => setNytt(n => ({ ...n, anbefaling: e.target.value }))}
+            rows={2} placeholder="Anbefaling (valgfritt)…"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" />
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => { setLeggerTil(false); setNytt({ tittel: '', type: 'internt', innhold: '', anbefaling: '' }); }}
+              className="px-3 py-1.5 text-xs rounded border border-gray-200 text-gray-600 hover:bg-gray-100">
+              Avbryt
+            </button>
+            <button onClick={leggTil}
+              className="px-3 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-700 font-medium">
+              Legg til notat
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setLeggerTil(true)}
+          className="w-full border-2 border-dashed border-gray-200 rounded-xl py-3 text-sm text-gray-400 hover:border-blue-300 hover:text-blue-500 transition-colors">
+          + Nytt notat
+        </button>
+      )}
+
+      {notater.length === 0 && !leggerTil && (
+        <p className="text-sm text-gray-400 text-center py-4">Ingen notater ennå</p>
+      )}
+      <div className="space-y-2">
+        {notater.map(n => (
+          <NotatKort key={n.id} notat={n}
+            onOppdater={data => oppdaterNotat(n.id, data)}
+            onSlett={slettNotat} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Voteringsforslag ──────────────────────────────────────────────
+const LØST_FORSLAG_TYPER = [
+  { id: 'flertall',   label: 'Flertallsforslag',   farge: '#22c55e' },
+  { id: 'mindretall', label: 'Mindretallsforslag',  farge: '#3b82f6' },
+];
+
+function InternVoteringFane({ sak, oppdater }) {
+  const løse = sak.votering?.løse || [];
+
+  const [nyttTekst,      setNyttTekst]      = useState('');
+  const [nyttType,       setNyttType]       = useState('flertall');
+  const [nyttAnbef,      setNyttAnbef]      = useState('');
+  const [leggerTil,      setLeggerTil]      = useState(false);
+  const [voteringer,     setVoteringer]     = useState(null);
+  const [lasterVot,      setLasterVot]      = useState(false);
+  const [apiForslag,     setApiForslag]     = useState({});
+  const [lasterForslag,  setLasterForslag]  = useState({});
+
+  const leggTilLøst = () => {
+    if (!nyttTekst.trim()) return;
+    const f = { id: String(Date.now()), tekst: nyttTekst, type: nyttType, anbefaling: nyttAnbef };
+    oppdater(sak.sakId, { ...sak, votering: { ...sak.votering, løse: [...løse, f] } });
+    setNyttTekst(''); setNyttAnbef(''); setNyttType('flertall'); setLeggerTil(false);
+  };
+
+  const slettLøst = (id) =>
+    oppdater(sak.sakId, { ...sak, votering: { ...sak.votering, løse: løse.filter(f => f.id !== id) } });
+
+  const lastVoteringer = async () => {
+    setLasterVot(true);
+    try { setVoteringer(parse.voteringer(await API.voteringer(sak.sakId))); }
+    catch { setVoteringer([]); }
+    setLasterVot(false);
+  };
+
+  const lastForslag = async (vId) => {
+    setLasterForslag(p => ({ ...p, [vId]: true }));
+    try { setApiForslag(p => ({ ...p, [vId]: parse.voteringsforslag(await API.voteringsforslag(vId)) })); }
+    catch { setApiForslag(p => ({ ...p, [vId]: [] })); }
+    setLasterForslag(p => ({ ...p, [vId]: false }));
+  };
+
+  return (
+    <div className="p-5 max-w-2xl space-y-6">
+
+      {/* ─ Egne forslag ─ */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Egne forslag</h3>
+          <button onClick={() => setLeggerTil(l => !l)}
+            className="text-xs text-blue-600 hover:text-blue-800 font-medium">
+            {leggerTil ? 'Avbryt' : '+ Legg til'}
+          </button>
+        </div>
+
+        {leggerTil && (
+          <div className="mb-3 border border-blue-200 rounded-xl bg-blue-50 p-4 space-y-3">
+            <select value={nyttType} onChange={e => setNyttType(e.target.value)}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none bg-white">
+              {LØST_FORSLAG_TYPER.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+            <textarea value={nyttTekst} onChange={e => setNyttTekst(e.target.value)}
+              autoFocus rows={4} placeholder="Forslagstekst…"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none" />
+            <input value={nyttAnbef} onChange={e => setNyttAnbef(e.target.value)}
+              placeholder="Intern merknad (valgfritt)"
+              className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+            <div className="flex justify-end">
+              <button onClick={leggTilLøst}
+                className="px-3 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-700 font-medium">
+                Lagre forslag
+              </button>
+            </div>
+          </div>
+        )}
+
+        {løse.length === 0 && !leggerTil && (
+          <p className="text-xs text-gray-400">Ingen egne forslag registrert ennå</p>
+        )}
+        <div className="space-y-2">
+          {løse.map(f => {
+            const ti = LØST_FORSLAG_TYPER.find(t => t.id === f.type) || LØST_FORSLAG_TYPER[0];
+            return (
+              <div key={f.id} className="border border-gray-100 rounded-xl bg-white p-3.5">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded text-white"
+                    style={{ background: ti.farge }}>{ti.label}</span>
+                  <button onClick={() => slettLøst(f.id)}
+                    className="ml-auto text-xs text-gray-400 hover:text-red-500">Slett</button>
+                </div>
+                <p className="text-sm text-gray-800 whitespace-pre-wrap">{f.tekst}</p>
+                {f.anbefaling && (
+                  <p className="text-xs text-gray-500 mt-2 italic">{f.anbefaling}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ─ Stortingets voteringer ─ */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            Stortingets voteringer
+          </h3>
+          {!voteringer && (
+            <button onClick={lastVoteringer} disabled={lasterVot}
+              className="text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50">
+              {lasterVot ? 'Laster…' : 'Last voteringer'}
+            </button>
+          )}
+        </div>
+        {voteringer === null && (
+          <p className="text-xs text-gray-400">Klikk "Last voteringer" for å hente endringsforslag fra Stortinget</p>
+        )}
+        {voteringer?.length === 0 && (
+          <p className="text-xs text-gray-400">Ingen voteringer funnet for denne saken</p>
+        )}
+        {voteringer && voteringer.length > 0 && (
+          <div className="space-y-3">
+            {voteringer.map(v => {
+              const vId = v.votering_id || v.id;
+              const forslagListe = apiForslag[vId];
+              const laster = lasterForslag[vId];
+              return (
+                <div key={vId} className="border border-gray-100 rounded-xl overflow-hidden">
+                  <div className="flex items-center justify-between px-3 py-2.5 bg-gray-50">
+                    <div>
+                      <p className="text-xs font-medium text-gray-700">{v.betegnelse || `Votering ${vId}`}</p>
+                      {v.dato && <p className="text-[11px] text-gray-400">{v.dato}</p>}
+                    </div>
+                    {!forslagListe && (
+                      <button onClick={() => lastForslag(vId)} disabled={!!laster}
+                        className="text-[11px] text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50">
+                        {laster ? 'Laster…' : 'Vis forslag'}
+                      </button>
+                    )}
+                  </div>
+                  {forslagListe && (
+                    <div className="divide-y divide-gray-50">
+                      {forslagListe.length === 0 && (
+                        <p className="text-xs text-gray-400 p-3">Ingen endringsforslag</p>
+                      )}
+                      {forslagListe.map((f, i) => (
+                        <div key={i} className="px-3 py-2.5">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="text-[11px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded shrink-0">
+                              Forslag {i + 1}
+                            </span>
+                            {f.parti?.id && <PartiBadge partiId={f.parti.id} partiNavn={f.parti.navn} />}
+                          </div>
+                          <p className="text-xs text-gray-700 line-clamp-3">
+                            {stripHtml(f.forslagstekst_som_html || f.tekst || '')}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── InternSakDetalj ───────────────────────────────────────────────
 const DETALJ_FANER = [
   { id: 'oversikt', label: 'Oversikt' },
@@ -5142,12 +5481,8 @@ function InternSakDetalj({ sak, oppdater, onSlett }) {
       <div className="flex-1 overflow-y-auto">
         {aktivFane === 'oversikt' && <InternOversiktFane sak={sak} oppdater={oppdater} />}
         {aktivFane === 'frister'  && <InternFristerFane  sak={sak} oppdater={oppdater} />}
-        {aktivFane === 'notater'  && (
-          <p className="p-6 text-sm text-gray-400 text-center">Notater implementeres i steg 3</p>
-        )}
-        {aktivFane === 'votering' && (
-          <p className="p-6 text-sm text-gray-400 text-center">Voteringsforslag implementeres i steg 3</p>
-        )}
+        {aktivFane === 'notater'  && <InternNotatFane    sak={sak} oppdater={oppdater} />}
+        {aktivFane === 'votering' && <InternVoteringFane sak={sak} oppdater={oppdater} />}
       </div>
     </div>
   );
