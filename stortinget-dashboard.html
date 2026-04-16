@@ -4733,11 +4733,44 @@ const _tildelKolonne = (x, kolonner) => {
 };
 
 function PDFImportDialog({ sesjonId, onLukk, onImport }) {
-  const [status,  setStatus]  = useState('idle');
-  const [feil,    setFeil]    = useState(null);
-  const [rader,   setRader]   = useState([]);
-  const [valgte,  setValgte]  = useState(new Set());
+  const [status,   setStatus]   = useState('idle');
+  const [feil,     setFeil]     = useState(null);
+  const [rader,    setRader]    = useState([]);
+  const [valgte,   setValgte]   = useState(new Set());
+  const [apiSaker, setApiSaker] = useState(null);
+  const [søkRad,   setSøkRad]   = useState(null);
+  const [sakSøk,   setSakSøk]   = useState('');
   const filRef = useRef(null);
+
+  const VISFEL = ['skriftlige_innspill','utkast_1','utkast_2','utkast_3','avgivelse','debatt'];
+  const VISLBL = { skriftlige_innspill:'Skr.', utkast_1:'1U', utkast_2:'2U', utkast_3:'3U', avgivelse:'Avg.', debatt:'Deb.' };
+
+  // Fuzzy-match row text against API saker list
+  const finnBestMatch = (radTekst, saker) => {
+    if (!saker?.length || !radTekst.trim()) return null;
+    // Try direct saksnummer match (5-6 digit number)
+    const numM = radTekst.match(/\b(\d{5,6})\b/);
+    if (numM) {
+      const s = saker.find(s => String(s.id) === numM[1]);
+      if (s) return { sak: s, score: 1.0 };
+    }
+    // Token-based fuzzy match
+    const stop = new Set(['og','om','til','fra','for','med','av','i','på','er','som','en','et','de','det','a','s','l','om']);
+    const tokens = radTekst.toLowerCase()
+      .replace(/\d{1,2}\.\d{1,2}\.\d{2,4}/g, '')
+      .replace(/[()]/g, ' ')
+      .split(/[\s,;:./-]+/)
+      .filter(t => t.length > 3 && !stop.has(t));
+    if (!tokens.length) return null;
+    let bestSak = null, bestScore = 0;
+    saker.forEach(sak => {
+      const txt = `${sak.tittel || ''} ${sak.korttittel || ''}`.toLowerCase();
+      const treff = tokens.filter(t => txt.includes(t)).length;
+      const score = treff / tokens.length;
+      if (score > bestScore) { bestScore = score; bestSak = sak; }
+    });
+    return bestScore >= 0.2 ? { sak: bestSak, score: bestScore } : null;
+  };
 
   const parsePDF = async (fil) => {
     setStatus('parsing'); setFeil(null);
@@ -4747,7 +4780,15 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
       pdfjsLib.GlobalWorkerOptions.workerSrc =
         'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-      const buf = await fil.arrayBuffer();
+      // Fetch API saker and read PDF concurrently
+      const cachedSaker = apiSaker;
+      const [buf, sakerData] = await Promise.all([
+        fil.arrayBuffer(),
+        cachedSaker ? Promise.resolve(null) : API.saker(sesjonId).catch(() => null),
+      ]);
+      const saker = cachedSaker || (sakerData ? parse.saker(sakerData) : []);
+      if (!cachedSaker && saker.length) setApiSaker(saker);
+
       const doc = await pdfjsLib.getDocument({ data: buf }).promise;
       const alleItems = [];
       for (let p = 1; p <= doc.numPages; p++) {
@@ -4764,43 +4805,54 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
       const radGrupp = _grupperIRader(alleItems, 6);
       const kolInfo  = _finnKolonner(radGrupp);
       if (!kolInfo) throw new Error(
-        'Fant ingen kjente kolonneoverskrifter.\n' +
-        'PDF-en bør ha overskrifter som «Sak», «Ansvarlig», «Avgivelse», «1. utkast» osv.'
+        'Fant ingen kjente datokolonner.\n' +
+        'PDF-en bør ha kolonneoverskrifter som «Avgivelse», «1. utkast» osv.'
+      );
+      const { headerIdx, kolonner } = kolInfo;
+      // Only use columns that map to date/frist fields
+      const datoKoler = kolonner.filter(k =>
+        k.felt && !['tittel','ansvarlig','sakId','kategori','posisjon'].includes(k.felt)
       );
 
-      const { headerIdx, kolonner } = kolInfo;
       const parsedRader = [];
-      radGrupp.slice(headerIdx + 1).forEach((rad, ri) => {
-        const felt = {};
+      radGrupp.slice(headerIdx + 1).forEach(rad => {
+        const datoer = {};
+        const tekstDeler = [];
+
         rad.items.forEach(it => {
-          const kol = _tildelKolonne(it.x, kolonner);
-          if (!kol?.felt) return;
-          felt[kol.felt] = felt[kol.felt] ? felt[kol.felt] + ' ' + it.tekst : it.tekst;
+          const erDato = /^\d{1,2}\.\d{1,2}\.\d{2,4}$/.test(it.tekst.trim());
+          if (erDato) {
+            const kol = _tildelKolonne(it.x, datoKoler);
+            if (kol?.felt) {
+              const iso = _parseDatoFraTekst(it.tekst);
+              if (iso) datoer[kol.felt] = iso;
+            }
+          } else {
+            tekstDeler.push(it.tekst);
+          }
         });
-        if (!Object.keys(felt).length) return;
+
+        const harDatoer = Object.keys(datoer).length > 0;
+        const rowText   = tekstDeler.join(' ').trim();
+        if (!harDatoer && !rowText) return;
+
         const frister = {
-          skriftlige_innspill: _parseDatoFraTekst(felt.skriftlige_innspill),
-          utkast_1: { dato: _parseDatoFraTekst(felt.utkast_1), merknad: null },
-          utkast_2: { dato: _parseDatoFraTekst(felt.utkast_2), merknad: null },
-          utkast_3: { dato: _parseDatoFraTekst(felt.utkast_3), merknad: null },
-          utkast_4: { dato: _parseDatoFraTekst(felt.utkast_4), merknad: null },
-          utkast_5: { dato: _parseDatoFraTekst(felt.utkast_5), merknad: null },
-          avgivelse: _parseDatoFraTekst(felt.avgivelse),
-          debatt:    _parseDatoFraTekst(felt.debatt),
+          skriftlige_innspill: datoer.skriftlige_innspill || '',
+          utkast_1: { dato: datoer.utkast_1 || '', merknad: null },
+          utkast_2: { dato: datoer.utkast_2 || '', merknad: null },
+          utkast_3: { dato: datoer.utkast_3 || '', merknad: null },
+          utkast_4: { dato: datoer.utkast_4 || '', merknad: null },
+          utkast_5: { dato: datoer.utkast_5 || '', merknad: null },
+          avgivelse: datoer.avgivelse || '',
+          debatt:    datoer.debatt    || '',
         };
-        parsedRader.push({
-          sakId:     felt.sakId?.trim() || `pdf-import-${Date.now()}-${ri}`,
-          tittel:    felt.tittel?.trim() || '(Ukjent sak)',
-          ansvarlig: felt.ansvarlig?.trim() || '',
-          kategori:  felt.kategori?.trim() || null,
-          posisjon:  felt.posisjon?.trim()  || null,
-          frister,
-          _autoId:   !felt.sakId,
-        });
+
+        const match = finnBestMatch(rowText, saker);
+        parsedRader.push({ rowText, frister, valgtSak: match?.sak || null, score: match?.score || 0 });
       });
 
       if (!parsedRader.length) throw new Error(
-        'Ingen datarader funnet under kolonnene.\n' +
+        'Ingen rader med datoer funnet.\n' +
         'Sjekk at PDF-en ikke er skannet bilde (krever tekstlag).'
       );
 
@@ -4814,34 +4866,46 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
   };
 
   const handleFil = e => { const f = e.target.files?.[0]; if (f) parsePDF(f); e.target.value = ''; };
+
   const toggleValgt = i => setValgte(prev => {
     const ny = new Set(prev); ny.has(i) ? ny.delete(i) : ny.add(i); return ny;
   });
 
-  const doImport = () => {
-    rader.filter((_, i) => valgte.has(i)).forEach(r => {
-      const eks = internDB.hent(r.sakId);
-      const sak = eks ? { ...eks } : internDB.tomSak(r.sakId, r.tittel, sesjonId);
-      sak.frister   = r.frister;
-      if (!eks) {
-        sak.ansvarlig = r.ansvarlig;
-        if (r.kategori) sak.kategori = r.kategori;
-        if (r.posisjon) sak.posisjon = r.posisjon;
-      }
-      internDB.lagre(r.sakId, sak);
-    });
-    onImport();
-    onLukk();
+  const byttSak = (radIdx, sak) => {
+    setRader(prev => prev.map((r, i) => i === radIdx ? { ...r, valgtSak: sak, score: 1.0 } : r));
+    setSøkRad(null); setSakSøk('');
   };
 
-  const fmtDato = (iso) => {
-    if (!iso) return '—';
+  const doImport = () => {
+    rader.filter((_, i) => valgte.has(i) && rader[i].valgtSak).forEach(r => {
+      const sak = r.valgtSak;
+      const eks = internDB.hent(sak.id);
+      const internSak = eks ? { ...eks } : internDB.tomSak(sak.id, sak.tittel || sak.korttittel, sesjonId);
+      internSak.frister = r.frister;
+      internDB.lagre(sak.id, internSak);
+    });
+    onImport(); onLukk();
+  };
+
+  const fmtDato = iso => {
+    if (!iso) return null;
     const [y, m, d] = iso.split('-');
     return `${d}.${m}.${y?.slice(2)}`;
   };
 
-  const VISFEL = ['skriftlige_innspill','utkast_1','utkast_2','utkast_3','avgivelse','debatt'];
-  const VISLBL = { skriftlige_innspill:'Skr.', utkast_1:'1U', utkast_2:'2U', utkast_3:'3U', avgivelse:'Avg.', debatt:'Deb.' };
+  const getFristDato = (frister, felt) =>
+    felt.startsWith('utkast') ? frister[felt]?.dato : frister[felt];
+
+  const søkResultater = useMemo(() => {
+    if (!apiSaker || !sakSøk.trim()) return [];
+    const q = sakSøk.toLowerCase();
+    return apiSaker
+      .filter(s => `${s.tittel||''} ${s.korttittel||''}`.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [apiSaker, sakSøk]);
+
+  const antallKlare    = rader.filter((r, i) => valgte.has(i) && r.valgtSak).length;
+  const antallUtenMatch = rader.filter((r, i) => valgte.has(i) && !r.valgtSak).length;
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
@@ -4865,9 +4929,9 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
               </div>
               <div className="text-center">
                 <p className="font-medium text-gray-800 mb-1">Last opp PDF med fristplan</p>
-                <p className="text-sm text-gray-500 max-w-xs">
-                  PDF-en skal ha kolonneoverskrifter som «Sak», «Avgivelse», «1. utkast» osv.
-                  og én rad per sak. Krever at PDF-en har et tekstlag (ikke skannet bilde).
+                <p className="text-sm text-gray-500 max-w-sm">
+                  Datoer hentes fra PDF-en og kobles automatisk mot saker i Stortinget-API.
+                  Krever at PDF-en har et tekstlag (ikke skannet bilde).
                 </p>
               </div>
               <button onClick={() => filRef.current?.click()}
@@ -4881,14 +4945,14 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
           {status === 'parsing' && (
             <div className="flex flex-col items-center gap-3 py-8">
               <Spinner />
-              <p className="text-sm text-gray-600">Leser PDF og analyserer tabell…</p>
+              <p className="text-sm text-gray-600">Leser PDF og søker etter saker i API…</p>
             </div>
           )}
 
           {status === 'error' && (
             <div className="py-8 text-center">
               <p className="text-red-600 font-medium mb-2">Kunne ikke lese PDF-en</p>
-              <p className="text-sm text-gray-600 mb-1 whitespace-pre-wrap">{feil}</p>
+              <p className="text-sm text-gray-600 whitespace-pre-wrap mb-1">{feil}</p>
               <button onClick={() => { setStatus('idle'); setFeil(null); }}
                 className="mt-4 px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200">
                 Prøv igjen
@@ -4899,10 +4963,12 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
           {status === 'preview' && (
             <>
               <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-gray-700">
-                  Fant <strong>{rader.length}</strong> saker.
-                  <span className="text-gray-500 ml-1">Velg hvilke som skal importeres:</span>
-                </p>
+                <div>
+                  <p className="text-sm text-gray-700">Fant <strong>{rader.length}</strong> rader med datoer.</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Saker er automatisk koblet til Stortinget-API. Klikk «Bytt» for å justere.
+                  </p>
+                </div>
                 <div className="flex gap-2 text-xs">
                   <button className="text-blue-600 hover:underline"
                     onClick={() => setValgte(new Set(rader.map((_, i) => i)))}>Velg alle</button>
@@ -4911,45 +4977,99 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
                     onClick={() => setValgte(new Set())}>Fjern alle</button>
                 </div>
               </div>
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs whitespace-nowrap">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="w-8 px-2 py-2"></th>
-                        <th className="text-left px-3 py-2 font-medium text-gray-700">Sak</th>
-                        <th className="text-left px-2 py-2 font-medium text-gray-700">Ansvarlig</th>
-                        {VISFEL.map(f => (
-                          <th key={f} className="text-center px-2 py-2 font-medium text-gray-700">{VISLBL[f]}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rader.map((r, i) => (
-                        <tr key={i} onClick={() => toggleValgt(i)} className={`border-b border-gray-100 last:border-0 cursor-pointer hover:bg-blue-50 transition-colors ${valgte.has(i) ? '' : 'opacity-40'}`}>
-                          <td className="px-2 py-2 text-center">
-                            <input type="checkbox" checked={valgte.has(i)} readOnly
-                              className="pointer-events-none" />
-                          </td>
-                          <td className="px-3 py-2 font-medium text-gray-800 max-w-[200px]">
-                            <div className="truncate" title={r.tittel}>{r.tittel}</div>
-                            {r._autoId && <div className="text-[10px] text-gray-400 font-normal">Automatisk ID</div>}
-                          </td>
-                          <td className="px-2 py-2 text-gray-600">{r.ansvarlig || '—'}</td>
-                          {VISFEL.map(f => {
-                            const dato = f.startsWith('utkast') ? r.frister[f]?.dato : r.frister[f];
-                            return (
-                              <td key={f} className={`px-2 py-2 text-center tabular-nums ${dato ? 'text-gray-700' : 'text-gray-300'}`}>
-                                {fmtDato(dato)}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+
+              <div className="space-y-2">
+                {rader.map((r, i) => {
+                  const inkl = valgte.has(i);
+                  const konfNivå = r.score >= 0.6 ? 'high' : r.score >= 0.25 ? 'med' : 'none';
+                  return (
+                    <div key={i} onClick={() => søkRad !== i && toggleValgt(i)}
+                      className={`border rounded-lg transition-colors cursor-pointer ${inkl ? 'border-gray-200 bg-white hover:border-gray-300' : 'border-gray-100 bg-gray-50 opacity-50'}`}>
+                      <div className="flex items-start gap-2 p-3">
+                        <input type="checkbox" checked={inkl} readOnly onClick={e => { e.stopPropagation(); toggleValgt(i); }}
+                          className="mt-1 shrink-0" />
+                        <div className="flex-1 min-w-0">
+
+                          {/* Sak match line */}
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${r.valgtSak ? (konfNivå === 'high' ? 'bg-green-500' : konfNivå === 'med' ? 'bg-yellow-400' : 'bg-blue-500') : 'bg-red-400'}`} />
+                            {r.valgtSak ? (
+                              <>
+                                <span className="text-sm font-medium text-gray-800 truncate flex-1" title={r.valgtSak.tittel}>
+                                  {r.valgtSak.korttittel || r.valgtSak.tittel}
+                                </span>
+                                <span className="text-[11px] text-gray-400 shrink-0">#{r.valgtSak.id}</span>
+                              </>
+                            ) : (
+                              <span className="text-sm text-gray-500 italic flex-1">Ingen match — velg manuelt</span>
+                            )}
+                            <button onClick={e => { e.stopPropagation(); setSøkRad(søkRad === i ? null : i); setSakSøk(''); }}
+                              className="text-xs text-blue-600 hover:underline shrink-0 ml-1 px-1">
+                              {søkRad === i ? 'Lukk' : 'Bytt'}
+                            </button>
+                          </div>
+
+                          {/* Manual search */}
+                          {søkRad === i && (
+                            <div className="mb-2 border border-blue-200 rounded-lg overflow-hidden" onClick={e => e.stopPropagation()}>
+                              <input autoFocus type="text" placeholder="Søk etter sak…"
+                                value={sakSøk} onChange={e => setSakSøk(e.target.value)}
+                                className="w-full px-3 py-2 text-sm border-b border-blue-100 outline-none" />
+                              <div className="max-h-36 overflow-y-auto">
+                                {!sakSøk.trim() && (
+                                  <p className="px-3 py-2 text-xs text-gray-400">
+                                    Skriv for å søke blant {apiSaker?.length || 0} saker i {sesjonId}
+                                  </p>
+                                )}
+                                {sakSøk.trim() && søkResultater.length === 0 && (
+                                  <p className="px-3 py-2 text-xs text-gray-400">Ingen treff</p>
+                                )}
+                                {søkResultater.map(s => (
+                                  <button key={s.id} onClick={() => byttSak(i, s)}
+                                    className="w-full text-left px-3 py-2 text-xs hover:bg-blue-50 border-b border-gray-100 last:border-0">
+                                    <span className="font-medium text-gray-800">{s.korttittel || s.tittel}</span>
+                                    <span className="text-gray-400 ml-2">#{s.id}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Dates */}
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                            {VISFEL.map(f => {
+                              const dato = getFristDato(r.frister, f);
+                              if (!dato) return null;
+                              return (
+                                <span key={f} className="text-[11px]">
+                                  <span className="text-gray-400">{VISLBL[f]}:</span>
+                                  <span className="text-gray-700 ml-0.5">{fmtDato(dato)}</span>
+                                </span>
+                              );
+                            })}
+                            {VISFEL.every(f => !getFristDato(r.frister, f)) && (
+                              <span className="text-[11px] text-gray-400 italic">Ingen datoer funnet</span>
+                            )}
+                          </div>
+
+                          {/* Raw PDF text (hint for debugging) */}
+                          {r.rowText && (
+                            <p className="text-[10px] text-gray-300 mt-1 truncate" title={r.rowText}>
+                              {r.rowText}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
+
+              {antallUtenMatch > 0 && (
+                <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mt-3">
+                  {antallUtenMatch} rad{antallUtenMatch === 1 ? '' : 'er'} mangler sakkobling og vil ikke importeres. Bruk «Bytt» for å koble dem manuelt.
+                </p>
+              )}
               <p className="text-[11px] text-gray-400 mt-2">
                 Eksisterende interne saker oppdateres med nye frister. Nye saker opprettes uten votering/notater.
               </p>
@@ -4960,15 +5080,13 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
 
         {status === 'preview' && (
           <div className="px-5 py-4 border-t flex items-center justify-between">
-            <p className="text-sm text-gray-500">{valgte.size} av {rader.length} saker valgt</p>
+            <p className="text-sm text-gray-500">{antallKlare} saker klare til import</p>
             <div className="flex gap-2">
               <button onClick={onLukk}
-                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">
-                Avbryt
-              </button>
-              <button onClick={doImport} disabled={!valgte.size}
+                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Avbryt</button>
+              <button onClick={doImport} disabled={!antallKlare}
                 className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40">
-                Importer {valgte.size} sak{valgte.size === 1 ? '' : 'er'}
+                Importer {antallKlare} sak{antallKlare === 1 ? '' : 'er'}
               </button>
             </div>
           </div>
