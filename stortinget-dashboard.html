@@ -8,6 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <style>
     body { margin: 0; background: #f8fafc; }
     ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -4657,6 +4658,327 @@ function InternSakKort({ sak, valgt, onClick }) {
   );
 }
 
+// ── PDF-import ────────────────────────────────────────────────────
+const _PDF_KOL = {
+  'sak':                   'tittel',
+  'sakstittel':            'tittel',
+  'tittel':                'tittel',
+  'saksnummer':            'sakId',
+  'sakid':                 'sakId',
+  'nr':                    'sakId',
+  'ansvarlig':             'ansvarlig',
+  'kategori':              'kategori',
+  'posisjon':              'posisjon',
+  'skriftlige innspill':   'skriftlige_innspill',
+  'skriftlige':            'skriftlige_innspill',
+  '1. utkast':             'utkast_1',
+  '2. utkast':             'utkast_2',
+  '3. utkast':             'utkast_3',
+  'siste frist politikk':  'utkast_3',
+  '4. utkast':             'utkast_4',
+  '5. utkast':             'utkast_5',
+  'avgivelse':             'avgivelse',
+  'debatt':                'debatt',
+  'dato for debatt':       'debatt',
+};
+
+const _parseDatoFraTekst = (t) => {
+  if (!t) return '';
+  const r = t.trim().replace(/\s+/g, '');
+  const m = r.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
+  if (m) {
+    const [, d, mo, y] = m;
+    const år = y.length === 2 ? (parseInt(y) >= 70 ? '19' + y : '20' + y) : y;
+    return `${år}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(r)) return r;
+  return '';
+};
+
+const _grupperIRader = (items, tol = 6) => {
+  const rader = [];
+  items.filter(it => it.tekst).forEach(it => {
+    const eks = rader.find(r => Math.abs(r.y - it.y) <= tol);
+    if (eks) { eks.items.push(it); }
+    else      { rader.push({ y: it.y, items: [it] }); }
+  });
+  rader.sort((a, b) => a.y - b.y);
+  rader.forEach(r => r.items.sort((a, b) => a.x - b.x));
+  return rader;
+};
+
+const _finnKolonner = (rader) => {
+  let best = -1, bestScore = 0;
+  rader.forEach((rad, i) => {
+    const score = rad.items.filter(it =>
+      Object.keys(_PDF_KOL).some(k => it.tekst.toLowerCase().includes(k))
+    ).length;
+    if (score > bestScore) { bestScore = score; best = i; }
+  });
+  if (best === -1) return null;
+  const kolonner = rader[best].items.map(it => {
+    const t = it.tekst.toLowerCase().trim();
+    const felt = Object.entries(_PDF_KOL).find(([k]) => t.includes(k))?.[1] || null;
+    return { x: it.x, tekst: it.tekst, felt };
+  });
+  return { headerIdx: best, kolonner };
+};
+
+const _tildelKolonne = (x, kolonner) => {
+  let best = null;
+  kolonner.forEach(k => {
+    if (k.x <= x + 30 && (!best || k.x > best.x)) best = k;
+  });
+  return best;
+};
+
+function PDFImportDialog({ sesjonId, onLukk, onImport }) {
+  const [status,  setStatus]  = useState('idle');
+  const [feil,    setFeil]    = useState(null);
+  const [rader,   setRader]   = useState([]);
+  const [valgte,  setValgte]  = useState(new Set());
+  const filRef = useRef(null);
+
+  const parsePDF = async (fil) => {
+    setStatus('parsing'); setFeil(null);
+    try {
+      const pdfjsLib = window['pdfjs-dist/build/pdf'];
+      if (!pdfjsLib) throw new Error('PDF.js er ikke lastet – last inn siden på nytt');
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+      const buf = await fil.arrayBuffer();
+      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      const alleItems = [];
+      for (let p = 1; p <= doc.numPages; p++) {
+        const side = await doc.getPage(p);
+        const vp   = side.getViewport({ scale: 1 });
+        const tc   = await side.getTextContent();
+        tc.items.forEach(it => {
+          const t = it.str?.trim();
+          if (t) alleItems.push({ tekst: t, x: it.transform[4], y: vp.height - it.transform[5] });
+        });
+      }
+      if (!alleItems.length) throw new Error('Ingen tekst funnet i PDF-en');
+
+      const radGrupp = _grupperIRader(alleItems, 6);
+      const kolInfo  = _finnKolonner(radGrupp);
+      if (!kolInfo) throw new Error(
+        'Fant ingen kjente kolonneoverskrifter.\n' +
+        'PDF-en bør ha overskrifter som «Sak», «Ansvarlig», «Avgivelse», «1. utkast» osv.'
+      );
+
+      const { headerIdx, kolonner } = kolInfo;
+      const parsedRader = [];
+      radGrupp.slice(headerIdx + 1).forEach((rad, ri) => {
+        const felt = {};
+        rad.items.forEach(it => {
+          const kol = _tildelKolonne(it.x, kolonner);
+          if (!kol?.felt) return;
+          felt[kol.felt] = felt[kol.felt] ? felt[kol.felt] + ' ' + it.tekst : it.tekst;
+        });
+        if (!Object.keys(felt).length) return;
+        const frister = {
+          skriftlige_innspill: _parseDatoFraTekst(felt.skriftlige_innspill),
+          utkast_1: { dato: _parseDatoFraTekst(felt.utkast_1), merknad: null },
+          utkast_2: { dato: _parseDatoFraTekst(felt.utkast_2), merknad: null },
+          utkast_3: { dato: _parseDatoFraTekst(felt.utkast_3), merknad: null },
+          utkast_4: { dato: _parseDatoFraTekst(felt.utkast_4), merknad: null },
+          utkast_5: { dato: _parseDatoFraTekst(felt.utkast_5), merknad: null },
+          avgivelse: _parseDatoFraTekst(felt.avgivelse),
+          debatt:    _parseDatoFraTekst(felt.debatt),
+        };
+        parsedRader.push({
+          sakId:     felt.sakId?.trim() || `pdf-import-${Date.now()}-${ri}`,
+          tittel:    felt.tittel?.trim() || '(Ukjent sak)',
+          ansvarlig: felt.ansvarlig?.trim() || '',
+          kategori:  felt.kategori?.trim() || null,
+          posisjon:  felt.posisjon?.trim()  || null,
+          frister,
+          _autoId:   !felt.sakId,
+        });
+      });
+
+      if (!parsedRader.length) throw new Error(
+        'Ingen datarader funnet under kolonnene.\n' +
+        'Sjekk at PDF-en ikke er skannet bilde (krever tekstlag).'
+      );
+
+      setRader(parsedRader);
+      setValgte(new Set(parsedRader.map((_, i) => i)));
+      setStatus('preview');
+    } catch (e) {
+      setFeil(e.message || String(e));
+      setStatus('error');
+    }
+  };
+
+  const handleFil = e => { const f = e.target.files?.[0]; if (f) parsePDF(f); e.target.value = ''; };
+  const toggleValgt = i => setValgte(prev => {
+    const ny = new Set(prev); ny.has(i) ? ny.delete(i) : ny.add(i); return ny;
+  });
+
+  const doImport = () => {
+    rader.filter((_, i) => valgte.has(i)).forEach(r => {
+      const eks = internDB.hent(r.sakId);
+      const sak = eks ? { ...eks } : internDB.tomSak(r.sakId, r.tittel, sesjonId);
+      sak.frister   = r.frister;
+      if (!eks) {
+        sak.ansvarlig = r.ansvarlig;
+        if (r.kategori) sak.kategori = r.kategori;
+        if (r.posisjon) sak.posisjon = r.posisjon;
+      }
+      internDB.lagre(r.sakId, sak);
+    });
+    onImport();
+    onLukk();
+  };
+
+  const fmtDato = (iso) => {
+    if (!iso) return '—';
+    const [y, m, d] = iso.split('-');
+    return `${d}.${m}.${y?.slice(2)}`;
+  };
+
+  const VISFEL = ['skriftlige_innspill','utkast_1','utkast_2','utkast_3','avgivelse','debatt'];
+  const VISLBL = { skriftlige_innspill:'Skr.', utkast_1:'1U', utkast_2:'2U', utkast_3:'3U', avgivelse:'Avg.', debatt:'Deb.' };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      onClick={e => e.target === e.currentTarget && onLukk()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[90vh] flex flex-col">
+
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <h2 className="font-semibold text-gray-800">Importer frister fra PDF</h2>
+          <button onClick={onLukk} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+
+          {status === 'idle' && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center">
+                <svg className="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+              </div>
+              <div className="text-center">
+                <p className="font-medium text-gray-800 mb-1">Last opp PDF med fristplan</p>
+                <p className="text-sm text-gray-500 max-w-xs">
+                  PDF-en skal ha kolonneoverskrifter som «Sak», «Avgivelse», «1. utkast» osv.
+                  og én rad per sak. Krever at PDF-en har et tekstlag (ikke skannet bilde).
+                </p>
+              </div>
+              <button onClick={() => filRef.current?.click()}
+                className="px-5 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
+                Velg PDF-fil
+              </button>
+              <input ref={filRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={handleFil} />
+            </div>
+          )}
+
+          {status === 'parsing' && (
+            <div className="flex flex-col items-center gap-3 py-8">
+              <Spinner />
+              <p className="text-sm text-gray-600">Leser PDF og analyserer tabell…</p>
+            </div>
+          )}
+
+          {status === 'error' && (
+            <div className="py-8 text-center">
+              <p className="text-red-600 font-medium mb-2">Kunne ikke lese PDF-en</p>
+              <p className="text-sm text-gray-600 mb-1 whitespace-pre-wrap">{feil}</p>
+              <button onClick={() => { setStatus('idle'); setFeil(null); }}
+                className="mt-4 px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200">
+                Prøv igjen
+              </button>
+            </div>
+          )}
+
+          {status === 'preview' && (
+            <>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm text-gray-700">
+                  Fant <strong>{rader.length}</strong> saker.
+                  <span className="text-gray-500 ml-1">Velg hvilke som skal importeres:</span>
+                </p>
+                <div className="flex gap-2 text-xs">
+                  <button className="text-blue-600 hover:underline"
+                    onClick={() => setValgte(new Set(rader.map((_, i) => i)))}>Velg alle</button>
+                  <span className="text-gray-300">|</span>
+                  <button className="text-blue-600 hover:underline"
+                    onClick={() => setValgte(new Set())}>Fjern alle</button>
+                </div>
+              </div>
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs whitespace-nowrap">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="w-8 px-2 py-2"></th>
+                        <th className="text-left px-3 py-2 font-medium text-gray-700">Sak</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-700">Ansvarlig</th>
+                        {VISFEL.map(f => (
+                          <th key={f} className="text-center px-2 py-2 font-medium text-gray-700">{VISLBL[f]}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rader.map((r, i) => (
+                        <tr key={i} onClick={() => toggleValgt(i)} className={`border-b border-gray-100 last:border-0 cursor-pointer hover:bg-blue-50 transition-colors ${valgte.has(i) ? '' : 'opacity-40'}`}>
+                          <td className="px-2 py-2 text-center">
+                            <input type="checkbox" checked={valgte.has(i)} readOnly
+                              className="pointer-events-none" />
+                          </td>
+                          <td className="px-3 py-2 font-medium text-gray-800 max-w-[200px]">
+                            <div className="truncate" title={r.tittel}>{r.tittel}</div>
+                            {r._autoId && <div className="text-[10px] text-gray-400 font-normal">Automatisk ID</div>}
+                          </td>
+                          <td className="px-2 py-2 text-gray-600">{r.ansvarlig || '—'}</td>
+                          {VISFEL.map(f => {
+                            const dato = f.startsWith('utkast') ? r.frister[f]?.dato : r.frister[f];
+                            return (
+                              <td key={f} className={`px-2 py-2 text-center tabular-nums ${dato ? 'text-gray-700' : 'text-gray-300'}`}>
+                                {fmtDato(dato)}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-2">
+                Eksisterende interne saker oppdateres med nye frister. Nye saker opprettes uten votering/notater.
+              </p>
+            </>
+          )}
+
+        </div>
+
+        {status === 'preview' && (
+          <div className="px-5 py-4 border-t flex items-center justify-between">
+            <p className="text-sm text-gray-500">{valgte.size} av {rader.length} saker valgt</p>
+            <div className="flex gap-2">
+              <button onClick={onLukk}
+                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">
+                Avbryt
+              </button>
+              <button onClick={doImport} disabled={!valgte.size}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40">
+                Importer {valgte.size} sak{valgte.size === 1 ? '' : 'er'}
+              </button>
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
 // ── InternSakListe ────────────────────────────────────────────────
 function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlett, refresh }) {
   const [søk,          setSøk]          = useState('');
@@ -4665,6 +4987,7 @@ function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlet
   const [sesjonFilter, setSesjonFilter] = useState('alle');
   const [panel,        setPanel]        = useState('saker'); // 'saker' | 'ansvarlige'
   const [visModal,     setVisModal]     = useState(false);
+  const [visPdfModal,  setVisPdfModal]  = useState(false);
   const [importFeil,   setImportFeil]   = useState(null);
   const filRef = useRef(null);
 
@@ -4872,12 +5195,25 @@ function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlet
             className="flex-1 text-xs py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">
             Import
           </button>
+          <button onClick={() => setVisPdfModal(true)}
+            className="flex-1 text-xs py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">
+            PDF
+          </button>
           <input ref={filRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
         </div>
         {importFeil && <p className="text-xs text-red-500 mt-1">{importFeil}</p>}
       </div>
 
-      {/* Modal */}
+      {/* PDF import modal */}
+      {visPdfModal && (
+        <PDFImportDialog
+          sesjonId={sesjonId}
+          onLukk={() => setVisPdfModal(false)}
+          onImport={refresh}
+        />
+      )}
+
+      {/* JSON add modal */}
       {visModal && (
         <LeggTilSakModal
           sesjonId={sesjonId}
