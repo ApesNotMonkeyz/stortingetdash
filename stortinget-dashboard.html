@@ -4402,6 +4402,425 @@ function TalerVisning({ sesjonId, onVelgRep }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// SEKSJON 11d: INTERNT ARBEIDSVERKTØY — Steg 1
+// Datalaget (localStorage), venstrepanel og modal
+// ═══════════════════════════════════════════════════════════════
+
+// ── Konstanter ───────────────────────────────────────────────────
+const UTKAST_FASER = [
+  { id: 'skriftlige_innspill', label: 'Skriftlige innspill',  alias: null,                        hasMerknad: false },
+  { id: 'utkast_1',            label: '1. utkast',            alias: 'Saksordførermerknader',      hasMerknad: true  },
+  { id: 'utkast_2',            label: '2. utkast',            alias: null,                        hasMerknad: true  },
+  { id: 'utkast_3',            label: '3. utkast',            alias: 'Siste frist politikk',       hasMerknad: true  },
+  { id: 'utkast_4',            label: '4. utkast',            alias: null,                        hasMerknad: true  },
+  { id: 'utkast_5',            label: '5. utkast',            alias: null,                        hasMerknad: true  },
+  { id: 'avgivelse',           label: 'Avgivelse',            alias: null,                        hasMerknad: false },
+  { id: 'debatt',              label: 'Dato for debatt',      alias: null,                        hasMerknad: false },
+];
+
+const INTERN_KATEGORI = {
+  A: { label: 'A – Fraksjon',    beskr: 'Løses på fraksjonsnivå',   farge: '#3b82f6' },
+  B: { label: 'B – Gruppestyre', beskr: 'Løses på gruppestyrenivå', farge: '#8b5cf6' },
+  C: { label: 'C – Gruppemøte',  beskr: 'Løses på gruppemøtenivå',  farge: '#f59e0b' },
+};
+
+const INTERN_POSISJON = {
+  støtte:         { label: 'Støtte',            farge: '#22c55e' },
+  støtte_merknad: { label: 'Støtte m/ merknad', farge: '#84cc16' },
+  avvente:        { label: 'Avvente',           farge: '#f59e0b' },
+  motstand:       { label: 'Motstand',          farge: '#ef4444' },
+};
+
+const INTERN_PRIORITET = {
+  høy:    { label: 'Høy',    farge: '#ef4444' },
+  normal: { label: 'Normal', farge: '#6b7280' },
+  lav:    { label: 'Lav',    farge: '#94a3b8' },
+};
+
+const INTERN_NOTAT_STATUS = {
+  ikke_aktuelt:    { label: 'Ikke aktuelt',    farge: '#9ca3af' },
+  skal_utarbeides: { label: 'Skal utarbeides', farge: '#f59e0b' },
+  under_arbeid:    { label: 'Under arbeid',    farge: '#3b82f6' },
+  ferdig:          { label: 'Ferdig',          farge: '#22c55e' },
+};
+
+// ── localStorage CRUD ────────────────────────────────────────────
+const INTERN_KEY = 'stortinget_intern_v1';
+
+const internDB = {
+  hentAlle: () => {
+    try { return JSON.parse(localStorage.getItem(INTERN_KEY) || '{}'); }
+    catch { return {}; }
+  },
+  hent: (sakId) => internDB.hentAlle()[String(sakId)] || null,
+  lagre: (sakId, data) => {
+    const alle = internDB.hentAlle();
+    alle[String(sakId)] = { ...data, sakId: String(sakId) };
+    localStorage.setItem(INTERN_KEY, JSON.stringify(alle));
+  },
+  slett: (sakId) => {
+    const alle = internDB.hentAlle();
+    delete alle[String(sakId)];
+    localStorage.setItem(INTERN_KEY, JSON.stringify(alle));
+  },
+  eksporter: () => {
+    const data = localStorage.getItem(INTERN_KEY) || '{}';
+    const blob = new Blob([data], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `stortinget-intern-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+  importer: (jsonText) => {
+    try {
+      const parsed = JSON.parse(jsonText);
+      const eksisterende = internDB.hentAlle();
+      localStorage.setItem(INTERN_KEY, JSON.stringify({ ...eksisterende, ...parsed }));
+      return true;
+    } catch { return false; }
+  },
+  tomSak: (sakId, sakTittel, sesjonId) => ({
+    sakId:       String(sakId),
+    sakTittel,
+    sesjonId,
+    ansvarlig:   '',
+    kategori:    null,
+    posisjon:    null,
+    prioritet:   'normal',
+    frister: {
+      skriftlige_innspill: '',
+      utkast_1: { dato: '', merknad: null },
+      utkast_2: { dato: '', merknad: null },
+      utkast_3: { dato: '', merknad: null },
+      utkast_4: { dato: '', merknad: null },
+      utkast_5: { dato: '', merknad: null },
+      avgivelse: '',
+      debatt:    '',
+    },
+    notat_status: null,
+    instanser:    [],
+    notater:      [],
+    votering:     { løse: [], apiForslag: {} },
+  }),
+};
+
+// ── Reaktiv hook ─────────────────────────────────────────────────
+function useInternDB() {
+  const [rev, setRev] = useState(0);
+  const refresh = () => setRev(r => r + 1);
+
+  const saker = useMemo(() => {
+    void rev; // avhengighet for re-beregning
+    return Object.values(internDB.hentAlle());
+  }, [rev]);
+
+  const oppdater = (sakId, data) => { internDB.lagre(sakId, data);  refresh(); };
+  const slettSak = (sakId)       => { internDB.slett(sakId);         refresh(); };
+
+  return { saker, oppdater, slettSak, refresh };
+}
+
+// ── LeggTilSakModal ───────────────────────────────────────────────
+function LeggTilSakModal({ sesjonId, internSaker, onLeggTil, onLukk }) {
+  const { data: sakerData, loading } = useData(() => API.saker(sesjonId), [sesjonId]);
+  const alleSaker  = useMemo(() => parse.saker(sakerData), [sakerData]);
+  const [søk, setSøk] = useState('');
+
+  const internIds = useMemo(
+    () => new Set(internSaker.map(s => String(s.sakId))),
+    [internSaker]
+  );
+
+  const filtrert = useMemo(() => {
+    if (!søk.trim()) return alleSaker.slice(0, 50);
+    const q = søk.toLowerCase();
+    return alleSaker.filter(s =>
+      (s.tittel      || '').toLowerCase().includes(q) ||
+      (s.korttittel  || '').toLowerCase().includes(q) ||
+      String(s.id).includes(q)
+    ).slice(0, 80);
+  }, [alleSaker, søk]);
+
+  // Lukk på Escape
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onLukk(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onLukk]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+      onClick={e => { if (e.target === e.currentTarget) onLukk(); }}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl mx-4 flex flex-col"
+        style={{ maxHeight: '80vh' }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <h2 className="font-semibold text-gray-900">Legg til sak</h2>
+          <button onClick={onLukk} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+
+        {/* Søk */}
+        <div className="px-4 py-3 border-b">
+          <input autoFocus value={søk} onChange={e => setSøk(e.target.value)}
+            placeholder="Søk på tittel eller saksnummer…"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+        </div>
+
+        {/* Sakliste */}
+        <div className="flex-1 overflow-y-auto">
+          {loading && <Spinner />}
+          {!loading && filtrert.length === 0 && <TomtResultat tekst="Ingen saker funnet" />}
+          {filtrert.map(s => {
+            const erLagtTil = internIds.has(String(s.id));
+            return (
+              <button key={s.id} disabled={erLagtTil}
+                onClick={() => { onLeggTil(s); onLukk(); }}
+                className={`w-full text-left px-4 py-3 border-b border-gray-50 hover:bg-blue-50 transition-colors flex items-start gap-3
+                  ${erLagtTil ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 line-clamp-2">{s.tittel || s.korttittel}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Sak {s.id} · {SAK_TYPE_MAP[s.type] || 'Sak'}
+                  </p>
+                </div>
+                {erLagtTil && <span className="text-xs text-green-600 font-medium shrink-0 mt-0.5">Lagt til</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div className="px-4 py-2 border-t bg-gray-50 text-xs text-gray-400">
+          {søk
+            ? `${filtrert.length} treff`
+            : `Viser ${filtrert.length} av ${alleSaker.length} saker · søk for å filtrere`}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── InternSakKort ─────────────────────────────────────────────────
+function InternSakKort({ sak, valgt, onClick }) {
+  const kat = sak.kategori ? INTERN_KATEGORI[sak.kategori] : null;
+  const pos = sak.posisjon ? INTERN_POSISJON[sak.posisjon] : null;
+  const pri = INTERN_PRIORITET[sak.prioritet] || INTERN_PRIORITET.normal;
+
+  return (
+    <button onClick={onClick}
+      className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition-colors hover:bg-blue-50
+        ${valgt ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''}`}>
+      <div className="flex items-start gap-2">
+        <span className="mt-1.5 w-2 h-2 rounded-full shrink-0"
+          style={{ background: pri.farge }} title={`Prioritet: ${pri.label}`} />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-900 line-clamp-2 leading-tight">{sak.sakTittel}</p>
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+            {sak.sesjonId && <span className="text-[11px] text-gray-400">{sak.sesjonId}</span>}
+            {kat && (
+              <span className="text-[11px] font-semibold px-1 rounded"
+                style={{ background: `${kat.farge}22`, color: kat.farge }}>
+                {sak.kategori}
+              </span>
+            )}
+            {pos && (
+              <span className="text-[11px] font-medium" style={{ color: pos.farge }}>
+                {pos.label}
+              </span>
+            )}
+            {sak.ansvarlig && (
+              <span className="text-[11px] text-gray-500 truncate">
+                {sak.ansvarlig.split(' ')[0]}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ── InternSakListe ────────────────────────────────────────────────
+function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlett, refresh }) {
+  const [søk,        setSøk]        = useState('');
+  const [katFilter,  setKatFilter]  = useState('alle');
+  const [priFilter,  setPriFilter]  = useState('alle');
+  const [visModal,   setVisModal]   = useState(false);
+  const [importFeil, setImportFeil] = useState(null);
+  const filRef = useRef(null);
+
+  const filtrert = useMemo(() => {
+    let res = [...saker];
+    if (søk.trim()) {
+      const q = søk.toLowerCase();
+      res = res.filter(s =>
+        (s.sakTittel  || '').toLowerCase().includes(q) ||
+        (s.ansvarlig  || '').toLowerCase().includes(q) ||
+        String(s.sakId).includes(q)
+      );
+    }
+    if (katFilter !== 'alle') res = res.filter(s => s.kategori  === katFilter);
+    if (priFilter !== 'alle') res = res.filter(s => s.prioritet === priFilter);
+    const priOrd = { høy: 0, normal: 1, lav: 2 };
+    return res.sort((a, b) =>
+      (priOrd[a.prioritet] ?? 1) - (priOrd[b.prioritet] ?? 1) ||
+      (a.sakTittel || '').localeCompare(b.sakTittel || '', 'nb')
+    );
+  }, [saker, søk, katFilter, priFilter]);
+
+  const handleImport = (e) => {
+    const fil = e.target.files?.[0];
+    if (!fil) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const ok = internDB.importer(ev.target.result);
+      if (ok) { refresh(); setImportFeil(null); }
+      else setImportFeil('Ugyldig fil – kunne ikke importere');
+    };
+    reader.readAsText(fil);
+    e.target.value = '';
+  };
+
+  return (
+    <div className="w-64 shrink-0 border-r border-gray-200 flex flex-col bg-white h-full">
+      {/* Topp */}
+      <div className="px-3 py-2.5 border-b border-gray-200">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            Interne saker
+          </span>
+          <button onClick={() => setVisModal(true)} title="Legg til sak"
+            className="w-6 h-6 rounded bg-blue-600 text-white text-sm font-bold flex items-center justify-center hover:bg-blue-700">
+            +
+          </button>
+        </div>
+        <input value={søk} onChange={e => setSøk(e.target.value)}
+          placeholder="Søk i saker…"
+          className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-300 mb-2" />
+        <div className="flex gap-1.5">
+          <select value={katFilter} onChange={e => setKatFilter(e.target.value)}
+            className="flex-1 text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none bg-white">
+            <option value="alle">Alle kat.</option>
+            {Object.entries(INTERN_KATEGORI).map(([k]) => (
+              <option key={k} value={k}>Kat. {k}</option>
+            ))}
+          </select>
+          <select value={priFilter} onChange={e => setPriFilter(e.target.value)}
+            className="flex-1 text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none bg-white">
+            <option value="alle">Alle pri.</option>
+            {Object.entries(INTERN_PRIORITET).map(([k, v]) => (
+              <option key={k} value={k}>{v.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Liste */}
+      <div className="flex-1 overflow-y-auto">
+        {filtrert.length === 0 && (
+          <p className="text-xs text-gray-400 p-4 text-center">
+            {saker.length === 0 ? 'Ingen saker lagt til ennå' : 'Ingen treff'}
+          </p>
+        )}
+        {filtrert.map(s => (
+          <InternSakKort key={s.sakId} sak={s} valgt={valgtSakId === s.sakId} onClick={() => onVelg(s)} />
+        ))}
+      </div>
+
+      {/* Bunn: eksport/import */}
+      <div className="px-3 py-2 border-t border-gray-100">
+        <div className="flex gap-1.5">
+          <button onClick={internDB.eksporter}
+            className="flex-1 text-xs py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">
+            Eksporter
+          </button>
+          <button onClick={() => filRef.current?.click()}
+            className="flex-1 text-xs py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">
+            Importer
+          </button>
+          <input ref={filRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
+        </div>
+        {importFeil && <p className="text-xs text-red-500 mt-1">{importFeil}</p>}
+      </div>
+
+      {/* Modal */}
+      {visModal && (
+        <LeggTilSakModal
+          sesjonId={sesjonId}
+          internSaker={saker}
+          onLeggTil={s => onLeggTil(internDB.tomSak(s.id, s.tittel || s.korttittel, sesjonId))}
+          onLukk={() => setVisModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── InternVisning ─────────────────────────────────────────────────
+function InternVisning({ sesjonId }) {
+  const { saker, oppdater, slettSak, refresh } = useInternDB();
+  const [valgtSak, setValgtSak] = useState(null);
+
+  // Hold valgtSak synkronisert med eventuelle oppdateringer
+  useEffect(() => {
+    if (valgtSak) {
+      const fersk = internDB.hent(valgtSak.sakId);
+      if (fersk) setValgtSak(fersk);
+    }
+  }, [saker]);
+
+  const leggTilSak = (tomSak) => {
+    oppdater(tomSak.sakId, tomSak);
+    setValgtSak(tomSak);
+  };
+
+  const handleSlett = (sakId) => {
+    slettSak(sakId);
+    if (valgtSak?.sakId === sakId) setValgtSak(null);
+  };
+
+  return (
+    <div className="flex h-full overflow-hidden">
+      <InternSakListe
+        saker={saker}
+        valgtSakId={valgtSak?.sakId}
+        sesjonId={sesjonId}
+        onVelg={s => setValgtSak(internDB.hent(s.sakId) || s)}
+        onLeggTil={leggTilSak}
+        onSlett={handleSlett}
+        refresh={refresh}
+      />
+
+      {/* Høyre panel — detaljvisning implementeres i steg 2 */}
+      <div className="flex-1 overflow-y-auto flex items-center justify-center bg-gray-50">
+        {valgtSak ? (
+          <div className="text-center max-w-sm p-6">
+            <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center mx-auto mb-3">
+              <span className="text-blue-600 font-bold text-lg">ST</span>
+            </div>
+            <p className="font-semibold text-gray-800 mb-1 line-clamp-3">{valgtSak.sakTittel}</p>
+            <p className="text-sm text-gray-400">Sak {valgtSak.sakId}</p>
+            <p className="text-xs text-gray-400 mt-3">Detaljvisning med frister og notater kommer i neste steg</p>
+          </div>
+        ) : (
+          <div className="text-center text-gray-400">
+            <div className="w-12 h-12 rounded-xl bg-gray-200 flex items-center justify-center mx-auto mb-3">
+              <span className="text-gray-400 font-bold">+</span>
+            </div>
+            <p className="text-sm font-medium text-gray-600">Velg en sak fra listen</p>
+            <p className="text-xs mt-1">eller legg til en ny sak med + knappen</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // SEKSJON 12: APP — rotnivå med navigasjon
 // ═══════════════════════════════════════════════════════════════
 const NAV_ITEMS = [
@@ -4411,6 +4830,7 @@ const NAV_ITEMS = [
   { id: 'partier',         label: 'Partier'            },
   { id: 'sporsmal',        label: 'Spørsmål'           },
   { id: 'taler',           label: 'Taler'              },
+  { id: 'intern',          label: 'Internt'            },
 ];
 
 function App() {
@@ -4502,6 +4922,7 @@ function App() {
         {view === 'partier'        && <PartierVisning          sesjonId={sesjonId} onVelgRep={handleVelgRep} />}
         {view === 'sporsmal'       && <SporsmalVisning         sesjonId={sesjonId} jumpTil={jumpTilSporsmal} />}
         {view === 'taler'          && <TalerVisning            sesjonId={sesjonId} onVelgRep={handleVelgRep} />}
+        {view === 'intern'         && <InternVisning           sesjonId={sesjonId} />}
       </div>
     </div>
   );
