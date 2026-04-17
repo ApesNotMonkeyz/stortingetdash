@@ -9,6 +9,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     body { margin: 0; background: #f8fafc; }
     ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -4659,6 +4660,57 @@ function InternSakKort({ sak, valgt, onClick }) {
   );
 }
 
+// ── Saksnavn-formatering ──────────────────────────────────────────
+// Forkorter "Representantforslag fra stortingsrepresentantene X og Y om Z" → "Dok 8 — Z"
+const formatKortSakNavn = (tittel) => {
+  if (!tittel) return '(Ukjent sak)';
+  // With doc number: "Representantforslag 123 S (2025-2026) fra representantene X om tema"
+  const m1 = tittel.match(/Representantforslag\s+(\d+\s+[SsLl]\s*\([^)]+\))\s+fra\s+[\s\S]+?\s+om\s+(.+)/i);
+  if (m1) return `Dok 8: ${m1[1].replace(/\s+/g,' ').trim()} om ${m1[2].trim()}`;
+  // With doc number, no "fra": "Representantforslag 123 S (2025-2026) om tema"
+  const m2 = tittel.match(/Representantforslag\s+(\d+\s+[SsLl]\s*\([^)]+\))\s+om\s+(.+)/i);
+  if (m2) return `Dok 8: ${m2[1].replace(/\s+/g,' ').trim()} om ${m2[2].trim()}`;
+  // No doc number, with "fra"
+  const m3 = tittel.match(/Representantforslag\s+fra\s+[\s\S]+?\s+om\s+(.+)/i);
+  if (m3) return `Dok 8 — ${m3[1].trim()}`;
+  // No doc number, no "fra"
+  const m4 = tittel.match(/Representantforslag\s+om\s+(.+)/i);
+  if (m4) return `Dok 8 — ${m4[1].trim()}`;
+  return tittel;
+};
+
+// ── Fristfase-farger ──────────────────────────────────────────────
+const FASE_FARGER = {
+  skriftlige_innspill: '#3b82f6',
+  utkast_1:            '#8b5cf6',
+  utkast_2:            '#6366f1',
+  utkast_3:            '#ec4899',
+  utkast_4:            '#f97316',
+  utkast_5:            '#eab308',
+  avgivelse:           '#ef4444',
+  debatt:              '#10b981',
+};
+const getFaseColor = (id) => FASE_FARGER[id] || '#6b7280';
+
+// ── Delt fuzzy-match mot API-saker ───────────────────────────────
+const _finnBestMatchSak = (radTekst, saker) => {
+  if (!saker?.length || !radTekst?.trim()) return null;
+  const numM = radTekst.match(/\b(\d{5,6})\b/);
+  if (numM) { const s = saker.find(s => String(s.id) === numM[1]); if (s) return { sak: s, score: 1.0 }; }
+  const stop = new Set(['og','om','til','fra','for','med','av','i','på','er','som','en','et','de','det','a','s','l']);
+  const tokens = radTekst.toLowerCase()
+    .replace(/\d{1,2}\.\d{1,2}\.\d{2,4}/g, '').replace(/[()]/g, ' ')
+    .split(/[\s,;:./-]+/).filter(t => t.length > 3 && !stop.has(t));
+  if (!tokens.length) return null;
+  let bestSak = null, bestScore = 0;
+  saker.forEach(sak => {
+    const txt = `${sak.tittel || ''} ${sak.korttittel || ''}`.toLowerCase();
+    const score = tokens.filter(t => txt.includes(t)).length / tokens.length;
+    if (score > bestScore) { bestScore = score; bestSak = sak; }
+  });
+  return bestScore >= 0.2 ? { sak: bestSak, score: bestScore } : null;
+};
+
 // ── PDF-import ────────────────────────────────────────────────────
 const _PDF_KOL = {
   'sak':                   'tittel',
@@ -4746,33 +4798,6 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
   const VISFEL = ['skriftlige_innspill','utkast_1','utkast_2','utkast_3','avgivelse','debatt'];
   const VISLBL = { skriftlige_innspill:'Skr.', utkast_1:'1U', utkast_2:'2U', utkast_3:'3U', avgivelse:'Avg.', debatt:'Deb.' };
 
-  // Fuzzy-match row text against API saker list
-  const finnBestMatch = (radTekst, saker) => {
-    if (!saker?.length || !radTekst.trim()) return null;
-    // Try direct saksnummer match (5-6 digit number)
-    const numM = radTekst.match(/\b(\d{5,6})\b/);
-    if (numM) {
-      const s = saker.find(s => String(s.id) === numM[1]);
-      if (s) return { sak: s, score: 1.0 };
-    }
-    // Token-based fuzzy match
-    const stop = new Set(['og','om','til','fra','for','med','av','i','på','er','som','en','et','de','det','a','s','l','om']);
-    const tokens = radTekst.toLowerCase()
-      .replace(/\d{1,2}\.\d{1,2}\.\d{2,4}/g, '')
-      .replace(/[()]/g, ' ')
-      .split(/[\s,;:./-]+/)
-      .filter(t => t.length > 3 && !stop.has(t));
-    if (!tokens.length) return null;
-    let bestSak = null, bestScore = 0;
-    saker.forEach(sak => {
-      const txt = `${sak.tittel || ''} ${sak.korttittel || ''}`.toLowerCase();
-      const treff = tokens.filter(t => txt.includes(t)).length;
-      const score = treff / tokens.length;
-      if (score > bestScore) { bestScore = score; bestSak = sak; }
-    });
-    return bestScore >= 0.2 ? { sak: bestSak, score: bestScore } : null;
-  };
-
   const parsePDF = async (fil) => {
     setStatus('parsing'); setFeil(null);
     try {
@@ -4848,7 +4873,7 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
           debatt:    datoer.debatt    || '',
         };
 
-        const match = finnBestMatch(rowText, saker);
+        const match = _finnBestMatchSak(rowText, saker);
         parsedRader.push({ rowText, frister, valgtSak: match?.sak || null, score: match?.score || 0 });
       });
 
@@ -5098,16 +5123,525 @@ function PDFImportDialog({ sesjonId, onLukk, onImport }) {
   );
 }
 
+// ── Excel-import ─────────────────────────────────────────────────
+// Kolonnekart for Excel — utvider _PDF_KOL med vanlige Excel-varianter
+const _XLS_KOL = {
+  ..._PDF_KOL,
+  'saksordførar':        'ansvarlig',
+  'saksordfører':        'ansvarlig',
+  'saksbehandler':       'ansvarlig',
+  'skriftlege innspel':  'skriftlige_innspill',
+  'høringsfrist':        'skriftlige_innspill',
+  'utkast 1':            'utkast_1',
+  'utkast 2':            'utkast_2',
+  'utkast 3':            'utkast_3',
+  'utkast 4':            'utkast_4',
+  'utkast 5':            'utkast_5',
+  'innstilling':         'avgivelse',
+  'avgi':                'avgivelse',
+};
+
+const _excelDatoTilISO = (val) => {
+  if (!val) return '';
+  if (val instanceof Date && !isNaN(val.getTime())) return val.toISOString().slice(0, 10);
+  if (typeof val === 'number') {
+    // Excel serial date (days since 1900-01-01, with leap year bug offset)
+    const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  }
+  if (typeof val === 'string') return _parseDatoFraTekst(val);
+  return '';
+};
+
+function ExcelImportDialog({ sesjonId, onLukk, onImport }) {
+  const [status,   setStatus]   = useState('idle');
+  const [feil,     setFeil]     = useState(null);
+  const [rader,    setRader]    = useState([]);
+  const [valgte,   setValgte]   = useState(new Set());
+  const [apiSaker, setApiSaker] = useState(null);
+  const [søkRad,   setSøkRad]   = useState(null);
+  const [sakSøk,   setSakSøk]   = useState('');
+  const filRef = useRef(null);
+
+  const VISFEL = ['skriftlige_innspill','utkast_1','utkast_2','utkast_3','avgivelse','debatt'];
+  const VISLBL = { skriftlige_innspill:'Skr.', utkast_1:'1U', utkast_2:'2U', utkast_3:'3U', avgivelse:'Avg.', debatt:'Deb.' };
+
+  const parseExcel = async (fil) => {
+    setStatus('parsing'); setFeil(null);
+    try {
+      const XLSX = window.XLSX;
+      if (!XLSX) throw new Error('SheetJS er ikke lastet – last inn siden på nytt');
+
+      const buf = await fil.arrayBuffer();
+      const wb  = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      if (!sheet) throw new Error('Fant ingen ark i Excel-filen');
+
+      // Get as 2D array (raw = true → Date objects preserved)
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+      if (rows.length < 2) throw new Error('Filen har for få rader');
+
+      // Find header row (first row with most column map matches)
+      let headerIdx = -1, bestScore = 0;
+      rows.forEach((rad, i) => {
+        const score = (rad || []).filter(c =>
+          Object.keys(_XLS_KOL).some(k => String(c || '').toLowerCase().trim().includes(k))
+        ).length;
+        if (score > bestScore) { bestScore = score; headerIdx = i; }
+      });
+      if (headerIdx === -1) headerIdx = 0; // assume first row is header
+
+      const headerRad = rows[headerIdx] || [];
+      const kolonner  = headerRad.map((c, colIdx) => {
+        const txt  = String(c || '').toLowerCase().trim();
+        const felt = Object.entries(_XLS_KOL).find(([k]) => txt.includes(k))?.[1] || null;
+        return { colIdx, tekst: String(c || ''), felt };
+      });
+
+      // Fetch API saker concurrently
+      const cachedSaker = apiSaker;
+      const sakerData = cachedSaker ? null : await API.saker(sesjonId).catch(() => null);
+      const saker = cachedSaker || (sakerData ? parse.saker(sakerData) : []);
+      if (!cachedSaker && saker.length) setApiSaker(saker);
+
+      // Parse data rows
+      const parsedRader = [];
+      rows.slice(headerIdx + 1).forEach(rad => {
+        if (!rad || rad.every(c => c == null || c === '')) return;
+        const felt = {};
+        kolonner.forEach(kol => {
+          if (!kol.felt) return;
+          const val = rad[kol.colIdx];
+          if (val == null || val === '') return;
+          if (['skriftlige_innspill','utkast_1','utkast_2','utkast_3','utkast_4','utkast_5','avgivelse','debatt'].includes(kol.felt)) {
+            const iso = _excelDatoTilISO(val);
+            if (iso) felt[kol.felt] = iso;
+          } else {
+            felt[kol.felt] = String(val).trim();
+          }
+        });
+
+        const rowText = (felt.tittel || felt.sakId || '');
+        const frister = {
+          skriftlige_innspill: felt.skriftlige_innspill || '',
+          utkast_1: { dato: felt.utkast_1 || '', merknad: null },
+          utkast_2: { dato: felt.utkast_2 || '', merknad: null },
+          utkast_3: { dato: felt.utkast_3 || '', merknad: null },
+          utkast_4: { dato: felt.utkast_4 || '', merknad: null },
+          utkast_5: { dato: felt.utkast_5 || '', merknad: null },
+          avgivelse: felt.avgivelse || '',
+          debatt:    felt.debatt    || '',
+        };
+
+        const harDatoer = ['skriftlige_innspill','utkast_1','utkast_2','utkast_3','utkast_4','utkast_5','avgivelse','debatt']
+          .some(f => felt[f]);
+        if (!harDatoer && !rowText) return;
+
+        const match = _finnBestMatchSak(rowText, saker);
+        parsedRader.push({
+          rowText,
+          ansvarlig: felt.ansvarlig || '',
+          frister,
+          valgtSak: match?.sak || null,
+          score: match?.score || 0,
+        });
+      });
+
+      if (!parsedRader.length) throw new Error('Ingen datarader med datoer funnet');
+      setRader(parsedRader);
+      setValgte(new Set(parsedRader.map((_, i) => i)));
+      setStatus('preview');
+    } catch (e) {
+      setFeil(e.message || String(e));
+      setStatus('error');
+    }
+  };
+
+  const handleFil = e => { const f = e.target.files?.[0]; if (f) parseExcel(f); e.target.value = ''; };
+  const toggleValgt = i => setValgte(prev => { const ny = new Set(prev); ny.has(i) ? ny.delete(i) : ny.add(i); return ny; });
+  const byttSak = (idx, sak) => { setRader(prev => prev.map((r, i) => i === idx ? { ...r, valgtSak: sak, score: 1.0 } : r)); setSøkRad(null); setSakSøk(''); };
+
+  const doImport = () => {
+    rader.filter((_, i) => valgte.has(i) && rader[i].valgtSak).forEach(r => {
+      const sak = r.valgtSak;
+      const eks = internDB.hent(sak.id);
+      const internSak = eks ? { ...eks } : internDB.tomSak(sak.id, sak.tittel || sak.korttittel, sesjonId);
+      internSak.frister = r.frister;
+      if (!eks && r.ansvarlig) internSak.ansvarlig = r.ansvarlig;
+      internDB.lagre(sak.id, internSak);
+    });
+    onImport(); onLukk();
+  };
+
+  const fmtDato = iso => { if (!iso) return null; const [y, m, d] = iso.split('-'); return `${d}.${m}.${y?.slice(2)}`; };
+  const getFristDato = (frister, felt) => felt.startsWith('utkast') ? frister[felt]?.dato : frister[felt];
+
+  const søkResultater = useMemo(() => {
+    if (!apiSaker || !sakSøk.trim()) return [];
+    const q = sakSøk.toLowerCase();
+    return apiSaker.filter(s => `${s.tittel||''} ${s.korttittel||''}`.toLowerCase().includes(q)).slice(0, 8);
+  }, [apiSaker, sakSøk]);
+
+  const antallKlare     = rader.filter((r, i) => valgte.has(i) && r.valgtSak).length;
+  const antallUtenMatch = rader.filter((r, i) => valgte.has(i) && !r.valgtSak).length;
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      onClick={e => e.target === e.currentTarget && onLukk()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <h2 className="font-semibold text-gray-800">Importer frister fra Excel</h2>
+          <button onClick={onLukk} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">
+          {status === 'idle' && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center">
+                <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <div className="text-center">
+                <p className="font-medium text-gray-800 mb-1">Last opp Excel-fil med fristplan</p>
+                <p className="text-sm text-gray-500 max-w-sm">
+                  Støtter .xlsx og .xls. Kolonneoverskrifter som «Avgivelse», «1. utkast», «Ansvarlig» osv. oppdages automatisk.
+                  Saker kobles mot Stortinget-API.
+                </p>
+              </div>
+              <button onClick={() => filRef.current?.click()}
+                className="px-5 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700">
+                Velg Excel-fil
+              </button>
+              <input ref={filRef} type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={handleFil} />
+            </div>
+          )}
+          {status === 'parsing' && (
+            <div className="flex flex-col items-center gap-3 py-8"><Spinner />
+              <p className="text-sm text-gray-600">Leser Excel og søker etter saker i API…</p>
+            </div>
+          )}
+          {status === 'error' && (
+            <div className="py-8 text-center">
+              <p className="text-red-600 font-medium mb-2">Kunne ikke lese filen</p>
+              <p className="text-sm text-gray-600 whitespace-pre-wrap mb-1">{feil}</p>
+              <button onClick={() => { setStatus('idle'); setFeil(null); }}
+                className="mt-4 px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200">Prøv igjen</button>
+            </div>
+          )}
+          {status === 'preview' && (
+            <>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-sm text-gray-700">Fant <strong>{rader.length}</strong> rader.</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Saker koblet mot API. Klikk «Bytt» for å justere.</p>
+                </div>
+                <div className="flex gap-2 text-xs">
+                  <button className="text-blue-600 hover:underline" onClick={() => setValgte(new Set(rader.map((_,i)=>i)))}>Velg alle</button>
+                  <span className="text-gray-300">|</span>
+                  <button className="text-blue-600 hover:underline" onClick={() => setValgte(new Set())}>Fjern alle</button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {rader.map((r, i) => {
+                  const inkl = valgte.has(i);
+                  const kons = r.score >= 0.6 ? 'high' : r.score >= 0.25 ? 'med' : 'none';
+                  return (
+                    <div key={i} onClick={() => søkRad !== i && toggleValgt(i)}
+                      className={`border rounded-lg cursor-pointer transition-colors ${inkl ? 'border-gray-200 bg-white hover:border-gray-300' : 'border-gray-100 bg-gray-50 opacity-50'}`}>
+                      <div className="flex items-start gap-2 p-3">
+                        <input type="checkbox" checked={inkl} readOnly onClick={e => { e.stopPropagation(); toggleValgt(i); }} className="mt-1 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${r.valgtSak ? (kons==='high'?'bg-green-500':kons==='med'?'bg-yellow-400':'bg-blue-500'):'bg-red-400'}`} />
+                            {r.valgtSak ? (
+                              <>
+                                <span className="text-sm font-medium text-gray-800 truncate flex-1" title={r.valgtSak.tittel}>
+                                  {formatKortSakNavn(r.valgtSak.korttittel || r.valgtSak.tittel)}
+                                </span>
+                                <span className="text-[11px] text-gray-400 shrink-0">#{r.valgtSak.id}</span>
+                              </>
+                            ) : (
+                              <span className="text-sm text-gray-500 italic flex-1">Ingen match — velg manuelt</span>
+                            )}
+                            <button onClick={e => { e.stopPropagation(); setSøkRad(søkRad===i?null:i); setSakSøk(''); }}
+                              className="text-xs text-blue-600 hover:underline shrink-0 ml-1 px-1">
+                              {søkRad === i ? 'Lukk' : 'Bytt'}
+                            </button>
+                          </div>
+                          {søkRad === i && (
+                            <div className="mb-2 border border-blue-200 rounded-lg overflow-hidden" onClick={e => e.stopPropagation()}>
+                              <input autoFocus type="text" placeholder="Søk sak…" value={sakSøk} onChange={e => setSakSøk(e.target.value)}
+                                className="w-full px-3 py-2 text-sm border-b border-blue-100 outline-none" />
+                              <div className="max-h-36 overflow-y-auto">
+                                {!sakSøk.trim() && <p className="px-3 py-2 text-xs text-gray-400">Skriv for å søke blant {apiSaker?.length || 0} saker</p>}
+                                {sakSøk.trim() && søkResultater.length === 0 && <p className="px-3 py-2 text-xs text-gray-400">Ingen treff</p>}
+                                {søkResultater.map(s => (
+                                  <button key={s.id} onClick={() => byttSak(i, s)}
+                                    className="w-full text-left px-3 py-2 text-xs hover:bg-blue-50 border-b border-gray-100 last:border-0">
+                                    <span className="font-medium text-gray-800">{formatKortSakNavn(s.korttittel || s.tittel)}</span>
+                                    <span className="text-gray-400 ml-2">#{s.id}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {r.ansvarlig && <p className="text-[11px] text-gray-500 mb-1">Ansvarlig: {r.ansvarlig}</p>}
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                            {VISFEL.map(f => { const dato = getFristDato(r.frister, f); if (!dato) return null;
+                              return <span key={f} className="text-[11px]"><span className="text-gray-400">{VISLBL[f]}:</span><span className="text-gray-700 ml-0.5">{fmtDato(dato)}</span></span>;
+                            })}
+                            {VISFEL.every(f => !getFristDato(r.frister,f)) && <span className="text-[11px] text-gray-400 italic">Ingen datoer funnet</span>}
+                          </div>
+                          {r.rowText && <p className="text-[10px] text-gray-300 mt-1 truncate" title={r.rowText}>{r.rowText}</p>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {antallUtenMatch > 0 && (
+                <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mt-3">
+                  {antallUtenMatch} rad{antallUtenMatch===1?'':'er'} mangler sakkobling og vil ikke importeres.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+        {status === 'preview' && (
+          <div className="px-5 py-4 border-t flex items-center justify-between">
+            <p className="text-sm text-gray-500">{antallKlare} saker klare til import</p>
+            <div className="flex gap-2">
+              <button onClick={onLukk} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Avbryt</button>
+              <button onClick={doImport} disabled={!antallKlare}
+                className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-40">
+                Importer {antallKlare} sak{antallKlare===1?'':'er'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── InternKalender ────────────────────────────────────────────────
+function InternKalender({ saker, onVelg, onLukk }) {
+  const [modus,   setModus]   = useState('uke');
+  const [sentrum, setSentrum] = useState(() => {
+    const d = new Date(); d.setHours(0,0,0,0); return d;
+  });
+
+  const alleHendelser = useMemo(() => {
+    const evts = [];
+    saker.forEach(s => {
+      UTKAST_FASER.forEach(fase => {
+        const raw  = s.frister?.[fase.id];
+        const dato = fase.hasMerknad ? raw?.dato : raw;
+        if (!dato) return;
+        const d = new Date(dato);
+        if (isNaN(d.getTime())) return;
+        evts.push({ sak: s, fase, dato: d, isoKey: d.toISOString().slice(0,10) });
+      });
+    });
+    return evts.sort((a, b) => a.dato - b.dato);
+  }, [saker]);
+
+  const iDagIso = new Date().toISOString().slice(0, 10);
+
+  const naviger = (dir) => {
+    const ny = new Date(sentrum);
+    if (modus === 'dag')    ny.setDate(ny.getDate() + dir);
+    if (modus === 'uke')    ny.setDate(ny.getDate() + dir * 7);
+    if (modus === 'maaned') ny.setMonth(ny.getMonth() + dir);
+    setSentrum(ny);
+  };
+
+  const tilIDag = () => { const d = new Date(); d.setHours(0,0,0,0); setSentrum(d); };
+
+  // --- Tittel-linje ---
+  const MNDNAVN = ['januar','februar','mars','april','mai','juni','juli','august','september','oktober','november','desember'];
+  const tittel = (() => {
+    if (modus === 'maaned') return `${MNDNAVN[sentrum.getMonth()]} ${sentrum.getFullYear()}`;
+    if (modus === 'dag') return sentrum.toLocaleDateString('nb-NO', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+    // uke: find monday
+    const man = new Date(sentrum);
+    man.setDate(man.getDate() - (man.getDay()+6)%7);
+    const søn = new Date(man); søn.setDate(man.getDate() + 6);
+    const manStr = man.toLocaleDateString('nb-NO', { day:'numeric', month:'short' });
+    const sønStr = søn.toLocaleDateString('nb-NO', { day:'numeric', month:'short' });
+    // Week number
+    const jan4 = new Date(man.getFullYear(), 0, 4);
+    const uke  = Math.ceil(((man - jan4) / 86400000 + jan4.getDay() + 1) / 7);
+    return `Uke ${uke}: ${manStr} – ${sønStr} ${søn.getFullYear()}`;
+  })();
+
+  // --- Hendelse-kort ---
+  const HendelseKort = ({ h, kompakt }) => {
+    const farge = getFaseColor(h.fase.id);
+    const dager = Math.ceil((h.dato - new Date()) / 86400000);
+    const fortid = dager < 0;
+    const nært   = !fortid && dager < 7;
+    return (
+      <button onClick={() => onVelg(h.sak)}
+        className={`w-full text-left rounded-lg px-2 py-1.5 hover:opacity-80 transition-opacity ${kompakt ? 'mb-0.5' : 'mb-1.5'}`}
+        style={{ background: `${farge}18`, borderLeft: `3px solid ${fortid ? '#ef4444' : nært ? '#f59e0b' : farge}` }}>
+        <div className={`font-semibold truncate ${kompakt ? 'text-[10px]' : 'text-[11px]'}`}
+          style={{ color: fortid ? '#ef4444' : farge }}>
+          {h.fase.label}
+        </div>
+        {!kompakt && (
+          <div className="text-[11px] text-gray-600 truncate leading-tight">
+            {formatKortSakNavn(h.sak.sakTittel)}
+          </div>
+        )}
+      </button>
+    );
+  };
+
+  // --- Månedsvisning ---
+  const MaanedView = () => {
+    const år = sentrum.getFullYear(), mnd = sentrum.getMonth();
+    const start = new Date(år, mnd, 1);
+    const slutt = new Date(år, mnd+1, 0);
+    const offset = (start.getDay() + 6) % 7;
+    const dager = [];
+    for (let i = 0; i < offset; i++) dager.push(null);
+    for (let d = 1; d <= slutt.getDate(); d++) dager.push(new Date(år, mnd, d));
+    const perDag = {};
+    alleHendelser.forEach(h => {
+      if (!perDag[h.isoKey]) perDag[h.isoKey] = [];
+      perDag[h.isoKey].push(h);
+    });
+    const UKD = ['Man','Tir','Ons','Tor','Fre','Lør','Søn'];
+    return (
+      <div>
+        <div className="grid grid-cols-7 border-b border-gray-200">
+          {UKD.map(d => <div key={d} className="text-center text-xs font-medium text-gray-400 py-2">{d}</div>)}
+        </div>
+        <div className="grid grid-cols-7">
+          {dager.map((dag, i) => {
+            if (!dag) return <div key={`e${i}`} className="border-r border-b border-gray-100 min-h-[90px]" />;
+            const iso   = dag.toISOString().slice(0,10);
+            const evts  = perDag[iso] || [];
+            const erIDag = iso === iDagIso;
+            return (
+              <div key={iso} className={`border-r border-b border-gray-100 min-h-[90px] p-1 ${erIDag ? 'bg-blue-50' : ''}`}>
+                <div className={`text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full mb-1 ${erIDag ? 'bg-blue-600 text-white' : 'text-gray-700'}`}>
+                  {dag.getDate()}
+                </div>
+                {evts.slice(0,3).map((h, j) => <HendelseKort key={j} h={h} kompakt />)}
+                {evts.length > 3 && <div className="text-[10px] text-gray-400 px-1">+{evts.length-3} til</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // --- Uke-visning ---
+  const UkeView = () => {
+    const man = new Date(sentrum);
+    man.setDate(man.getDate() - (man.getDay()+6)%7);
+    const dager = Array.from({length:7}, (_,i) => { const d = new Date(man); d.setDate(man.getDate()+i); return d; });
+    const perDag = {};
+    alleHendelser.forEach(h => { if (!perDag[h.isoKey]) perDag[h.isoKey] = []; perDag[h.isoKey].push(h); });
+    const UKDN = ['Man','Tir','Ons','Tor','Fre','Lør','Søn'];
+    return (
+      <div className="grid grid-cols-7 gap-2">
+        {dager.map((dag, i) => {
+          const iso  = dag.toISOString().slice(0,10);
+          const evts = perDag[iso] || [];
+          const erIDag = iso === iDagIso;
+          return (
+            <div key={iso}>
+              <div className="text-center mb-2 pb-2 border-b border-gray-100">
+                <div className="text-xs text-gray-400">{UKDN[i]}</div>
+                <div className={`text-lg font-semibold w-9 h-9 mx-auto flex items-center justify-center rounded-full ${erIDag ? 'bg-blue-600 text-white' : 'text-gray-800'}`}>
+                  {dag.getDate()}
+                </div>
+              </div>
+              {evts.length === 0 && <div className="text-[10px] text-gray-300 text-center">—</div>}
+              {evts.map((h,j) => <HendelseKort key={j} h={h} kompakt={false} />)}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // --- Dag-visning ---
+  const DagView = () => {
+    const iso  = sentrum.toISOString().slice(0,10);
+    const evts = alleHendelser.filter(h => h.isoKey === iso);
+    return (
+      <div className="max-w-xl mx-auto">
+        {evts.length === 0 ? (
+          <p className="text-center text-gray-400 py-10">Ingen frister denne dagen</p>
+        ) : (
+          <div className="space-y-2">
+            {evts.map((h, i) => (
+              <div key={i} className="border border-gray-200 rounded-xl p-4" style={{ borderLeftColor: getFaseColor(h.fase.id), borderLeftWidth: 4 }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold" style={{ color: getFaseColor(h.fase.id) }}>{h.fase.label}</div>
+                    <div className="text-sm text-gray-800 mt-0.5 font-medium">{formatKortSakNavn(h.sak.sakTittel)}</div>
+                    {h.sak.ansvarlig && <div className="text-xs text-gray-500 mt-1">{h.sak.ansvarlig}</div>}
+                  </div>
+                  <button onClick={() => onVelg(h.sak)} className="text-xs text-blue-600 hover:underline shrink-0">Åpne sak</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex-1 flex flex-col bg-white overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-200 shrink-0">
+        <button onClick={onLukk} className="text-xs text-gray-500 hover:text-gray-800 flex items-center gap-1">
+          ← Liste
+        </button>
+        <div className="h-4 w-px bg-gray-200" />
+        <button onClick={() => naviger(-1)} className="w-7 h-7 rounded hover:bg-gray-100 flex items-center justify-center text-gray-600">‹</button>
+        <h2 className="font-semibold text-gray-800 text-sm flex-1 text-center">{tittel}</h2>
+        <button onClick={() => naviger(1)}  className="w-7 h-7 rounded hover:bg-gray-100 flex items-center justify-center text-gray-600">›</button>
+        <button onClick={tilIDag} className="text-xs text-blue-600 hover:underline">I dag</button>
+        <div className="h-4 w-px bg-gray-200" />
+        <div className="flex gap-0.5 bg-gray-100 rounded p-0.5">
+          {[['dag','Dag'],['uke','Uke'],['maaned','Mnd']].map(([m, lbl]) => (
+            <button key={m} onClick={() => setModus(m)}
+              className={`text-xs px-2.5 py-1 rounded font-medium transition-colors ${modus===m ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+      {/* Kalender-innhold */}
+      <div className="flex-1 overflow-y-auto p-4">
+        {modus === 'maaned' && <MaanedView />}
+        {modus === 'uke'    && <UkeView    />}
+        {modus === 'dag'    && <DagView    />}
+      </div>
+    </div>
+  );
+}
+
 // ── InternSakListe ────────────────────────────────────────────────
-function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlett, refresh }) {
-  const [søk,          setSøk]          = useState('');
-  const [katFilter,    setKatFilter]    = useState('alle');
-  const [priFilter,    setPriFilter]    = useState('alle');
-  const [sesjonFilter, setSesjonFilter] = useState('alle');
-  const [panel,        setPanel]        = useState('saker'); // 'saker' | 'ansvarlige'
-  const [visModal,     setVisModal]     = useState(false);
-  const [visPdfModal,  setVisPdfModal]  = useState(false);
-  const [importFeil,   setImportFeil]   = useState(null);
+function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlett, refresh, onVisKalender }) {
+  const [søk,           setSøk]           = useState('');
+  const [katFilter,     setKatFilter]     = useState('alle');
+  const [priFilter,     setPriFilter]     = useState('alle');
+  const [sesjonFilter,  setSesjonFilter]  = useState('alle');
+  const [panel,         setPanel]         = useState('saker'); // 'saker' | 'ansvarlige'
+  const [visModal,      setVisModal]      = useState(false);
+  const [visPdfModal,   setVisPdfModal]   = useState(false);
+  const [visExcelModal, setVisExcelModal] = useState(false);
+  const [importFeil,    setImportFeil]    = useState(null);
   const filRef = useRef(null);
 
   // Unike sesjoner fra sporede saker
@@ -5318,6 +5852,14 @@ function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlet
             className="flex-1 text-xs py-1.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">
             PDF
           </button>
+          <button onClick={() => setVisExcelModal(true)}
+            className="flex-1 text-xs py-1.5 rounded border border-green-200 text-green-700 hover:bg-green-50">
+            Excel
+          </button>
+          <button onClick={onVisKalender}
+            className="flex-1 text-xs py-1.5 rounded border border-violet-200 text-violet-700 hover:bg-violet-50">
+            📅
+          </button>
           <input ref={filRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
         </div>
         {importFeil && <p className="text-xs text-red-500 mt-1">{importFeil}</p>}
@@ -5329,6 +5871,15 @@ function InternSakListe({ saker, valgtSakId, sesjonId, onVelg, onLeggTil, onSlet
           sesjonId={sesjonId}
           onLukk={() => setVisPdfModal(false)}
           onImport={refresh}
+        />
+      )}
+
+      {/* Excel import modal */}
+      {visExcelModal && (
+        <ExcelImportDialog
+          sesjonId={sesjonId}
+          onLukk={() => setVisExcelModal(false)}
+          onImport={() => { refresh(); setVisExcelModal(false); }}
         />
       )}
 
@@ -6623,7 +7174,8 @@ function InternDashboard({ saker, onVelg }) {
 // ── InternVisning ─────────────────────────────────────────────────
 function InternVisning({ sesjonId }) {
   const { saker, oppdater, slettSak, refresh } = useInternDB();
-  const [valgtSak, setValgtSak] = useState(null);
+  const [valgtSak,    setValgtSak]    = useState(null);
+  const [visKalender, setVisKalender] = useState(false);
 
   // Hold valgtSak synkronisert med eventuelle oppdateringer
   useEffect(() => {
@@ -6645,25 +7197,36 @@ function InternVisning({ sesjonId }) {
 
   return (
     <div className="flex h-full overflow-hidden">
-      <InternSakListe
-        saker={saker}
-        valgtSakId={valgtSak?.sakId}
-        sesjonId={sesjonId}
-        onVelg={s => setValgtSak(internDB.hent(s.sakId) || s)}
-        onLeggTil={leggTilSak}
-        onSlett={handleSlett}
-        refresh={refresh}
-      />
-
-      {/* Høyre panel */}
-      {valgtSak ? (
-        <InternSakDetalj
-          sak={valgtSak}
-          oppdater={oppdater}
-          onSlett={handleSlett}
+      {visKalender ? (
+        <InternKalender
+          saker={saker}
+          onVelg={s => { setValgtSak(internDB.hent(s.sakId) || s); setVisKalender(false); }}
+          onLukk={() => setVisKalender(false)}
         />
       ) : (
-        <InternDashboard saker={saker} onVelg={s => setValgtSak(internDB.hent(s.sakId) || s)} />
+        <>
+          <InternSakListe
+            saker={saker}
+            valgtSakId={valgtSak?.sakId}
+            sesjonId={sesjonId}
+            onVelg={s => setValgtSak(internDB.hent(s.sakId) || s)}
+            onLeggTil={leggTilSak}
+            onSlett={handleSlett}
+            refresh={refresh}
+            onVisKalender={() => setVisKalender(true)}
+          />
+
+          {/* Høyre panel */}
+          {valgtSak ? (
+            <InternSakDetalj
+              sak={valgtSak}
+              oppdater={oppdater}
+              onSlett={handleSlett}
+            />
+          ) : (
+            <InternDashboard saker={saker} onVelg={s => setValgtSak(internDB.hent(s.sakId) || s)} />
+          )}
+        </>
       )}
     </div>
   );
