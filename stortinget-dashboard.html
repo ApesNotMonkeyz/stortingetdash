@@ -4517,6 +4517,7 @@ const internDB = {
     instanser:    [],
     notater:      [],
     votering:     { løse: [], apiForslag: {} },
+    analyseTekst: '',
   }),
 };
 
@@ -6085,81 +6086,76 @@ function InternVoteringFane({ sak, oppdater }) {
 }
 
 // ── InternAnalyseFane ────────────────────────────────────────────
-function InternAnalyseFane({ sak }) {
+function InternAnalyseFane({ sak, oppdater }) {
   const sesjonId = sak.sesjonId;
-  const [status,      setStatus]      = useState('idle');
-  const [trinn,       setTrinn]       = useState('');
-  const [egneForslag, setEgneForslag] = useState(null);
-  const [nøkkelord,   setNøkkelord]   = useState([]);
-  const [liknende,    setLiknende]    = useState([]);
-  const [feil,        setFeil]        = useState(null);
+  const [tekst,     setTekst]    = useState(sak.analyseTekst || '');
+  const [ulagret,   setUlagret]  = useState(false);
+  const [status,    setStatus]   = useState('idle');
+  const [trinn,     setTrinn]    = useState('');
+  const [nøkkelord, setNøkkelord] = useState([]);
+  const [liknende,  setLiknende] = useState([]);
+  const [feil,      setFeil]     = useState(null);
 
-  // Reset when switching saker
   useEffect(() => {
-    setStatus('idle'); setEgneForslag(null); setLiknende([]); setNøkkelord([]); setFeil(null);
+    setTekst(sak.analyseTekst || '');
+    setUlagret(false);
+    setStatus('idle');
+    setLiknende([]); setNøkkelord([]); setFeil(null);
   }, [sak.sakId]);
-
-  // Strip parliamentary boilerplate before keyword extraction
-  const stripParlFrase = (t) => t.toLowerCase()
-    .replace(/stortinget\s+(ber\s+regjeringen\s+(om\s+)?(å\s+)?|vedtar\s+(å\s+)?|anmoder\s+regjeringen\s+(om\s+)?(å\s+)?)/g, ' ')
-    .replace(/\b(regjeringen|stortinget|statsbudsjettet|budsjettet|innstillingen)\b/g, ' ')
-    .replace(/fremme\s+(forslag|en)?\s*/g, ' ')
-    .replace(/\s{2,}/g, ' ');
 
   const STOP = new Set([
     'og','i','at','er','til','på','av','en','et','de','som','med','for','fra','etter',
     'om','kan','skal','ikke','dette','den','det','bli','ha','vil','ved','over','under',
     'da','når','også','alle','sin','seg','mot','inn','ut','enn','mer','samt','eller',
-    'disse','slik','bør','bare','hele','ingen','samt','jfr','slik','være','være',
-    'dette','hvilket','hvilke','denne','disse','slikt','slike','annet','andre',
+    'disse','slik','bør','bare','hele','ingen','jfr','være','dette','hvilket','hvilke',
+    'denne','disse','slikt','slike','annet','andre','stortinget','regjeringen',
+    'storting','regjeringens','statsbudsjettet','budsjettet','innstillingen',
+    'fremme','vedtar','anmoder',
   ]);
 
   const trekkUtNøkkelord = (tekster) => {
-    const ren = tekster
-      .map(t => stripParlFrase(stripHtml(t)))
-      .join(' ')
-      .replace(/[^a-zæøå\s]/gi, ' ')
-      .toLowerCase();
+    const ren = tekster.join(' ')
+      .toLowerCase()
+      // Strip parliamentary boilerplate
+      .replace(/stortinget\s+(ber\s+regjeringen\s+(om\s+)?(å\s+)?|vedtar\s+(å\s+)?|anmoder\s+regjeringen\s+(om\s+)?(å\s+)?)/g, ' ')
+      .replace(/[^a-zæøå\s]/gi, ' ');
     const freq = {};
     ren.split(/\s+/).filter(o => o.length >= 5 && !STOP.has(o)).forEach(o => {
       freq[o] = (freq[o] || 0) + 1;
     });
-    return Object.entries(freq)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 12)
-      .map(([ord]) => ord);
-  };
-
-  const scoreSakMotNøkkelord = (apiSak, nøkkel) => {
-    const txt = `${apiSak.tittel||''} ${apiSak.korttittel||''} ${toArray(apiSak.emne_liste).map(e => e.navn||'').join(' ')}`.toLowerCase();
-    return nøkkel.reduce((s, n) => s + (txt.includes(n) ? 1 : 0), 0);
+    return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([o]) => o);
   };
 
   const kjørAnalyse = async () => {
-    setStatus('kjorer'); setFeil(null); setEgneForslag(null); setLiknende([]); setNøkkelord([]);
+    // Lagre tekst til internDB
+    const tekstÅBruke = tekst.trim();
+    if (ulagret) {
+      oppdater(sak.sakId, { ...sak, analyseTekst: tekst });
+      setUlagret(false);
+    }
+
+    setStatus('kjorer'); setFeil(null); setLiknende([]); setNøkkelord([]);
+
     try {
-      // ── 1. Forslag i denne saken ──────────────────────────────────
-      setTrinn('Henter forslag i saken…');
-      const voteringer = parse.voteringer(await API.voteringer(sak.sakId));
-      let egneF = [];
-      if (voteringer.length) {
-        const forslagData = await Promise.all(
-          voteringer.slice(0, 5).map(v => API.voteringsforslag(v.votering_id || v.id).catch(() => null))
-        );
-        forslagData.forEach(d => { if (d) egneF.push(...parse.voteringsforslag(d)); });
-      }
-      setEgneForslag(egneF);
+      // ── 1. Emner fra API (1 call, cachet etter første gang) ──────
+      setTrinn('Henter emnekategorier for saken…');
+      let sakEmner = [];
+      try {
+        const sakData = await API.sak(sak.sakId);
+        sakEmner = toArray(sakData?.emne_liste).map(e => (e.navn || '').toLowerCase()).filter(Boolean);
+      } catch { /* emner er bonus, ikke kritisk */ }
 
-      // ── 2. Nøkkelord ──────────────────────────────────────────────
-      setTrinn('Analyserer forslagstekster…');
-      const nøkkel = trekkUtNøkkelord([
-        ...egneF.map(f => f.forslagstekst_som_html || f.tekst || ''),
-        sak.sakTittel || '',
-      ]);
+      // ── 2. Nøkkelord fra brukerens forslagstekst + sakstittel ────
+      setTrinn('Analyserer forslagstekst…');
+      const kildetekster = [tekstÅBruke, sak.sakTittel || '', ...sakEmner].filter(Boolean);
+      const nøkkel = trekkUtNøkkelord(kildetekster);
       setNøkkelord(nøkkel);
-      if (!nøkkel.length) { setStatus('ferdig'); return; }
 
-      // ── 3. Saker fra 3 sesjoner (gjeldende + 2 tidligere) ─────────
+      if (!nøkkel.length && !sakEmner.length) {
+        throw new Error('Legg inn forslagsteksten (kulepunktene) i tekstfeltet over for å starte analysen.');
+      }
+
+      // ── 3. Saker fra gjeldende + 2 tidligere sesjoner ───────────
       setTrinn('Søker i historiske saker…');
       const prev1 = forrigeSesjon(sesjonId);
       const prev2 = forrigeSesjon(prev1);
@@ -6169,28 +6165,28 @@ function InternAnalyseFane({ sak }) {
         API.saker(prev2).catch(() => null),
       ]);
 
-      // ── 4. Score og ranger ────────────────────────────────────────
+      // ── 4. Score: nøkkelord-overlap + emne-overlap ───────────────
       const kandidater = [];
       sakerData.forEach((d, idx) => {
         const sid = [sesjonId, prev1, prev2][idx];
         if (!d) return;
-        parse.saker(d)
-          .filter(s => String(s.id) !== String(sak.sakId))
-          .forEach(s => {
-            const score = scoreSakMotNøkkelord(s, nøkkel);
-            if (score >= 2) kandidater.push({ apiSak: s, score, sesjonId: sid });
-          });
+        parse.saker(d).filter(s => String(s.id) !== String(sak.sakId)).forEach(s => {
+          const txt = `${s.tittel||''} ${s.korttittel||''} ${toArray(s.emne_liste).map(e => e.navn||'').join(' ')}`.toLowerCase();
+          const kwScore    = nøkkel.reduce((sum, n) => sum + (txt.includes(n) ? 1 : 0), 0);
+          const emneScore  = sakEmner.reduce((sum, e) => sum + (txt.includes(e) ? 2 : 0), 0);
+          const total      = kwScore + emneScore;
+          if (total >= 2) kandidater.push({ apiSak: s, score: total, kwScore, emneScore, sesjonId: sid });
+        });
       });
       const topp = kandidater.sort((a, b) => b.score - a.score).slice(0, 6);
       if (!topp.length) { setLiknende([]); setStatus('ferdig'); return; }
 
-      // ── 5. Voteringsutfall for toppkandidatene ────────────────────
+      // ── 5. Voteringsutfall for topp-kandidatene ──────────────────
       setTrinn('Henter voteringsutfall…');
       const resultater = await Promise.all(topp.map(async ({ apiSak, score, sesjonId: sid }) => {
         try {
           const hvot = parse.voteringer(await API.voteringer(apiSak.id));
           if (!hvot.length) return { apiSak, score, sesjonId: sid, forslag: [], partiTot: null };
-          // Bruk siste votering (endelig vedtak)
           const sisteV = hvot[hvot.length - 1];
           const vId    = sisteV.votering_id || sisteV.id;
           const [fData, rData] = await Promise.all([
@@ -6213,18 +6209,17 @@ function InternAnalyseFane({ sak }) {
     }
   };
 
-  // Mini-komponent: for/mot-bar + partifarger
   const UtfallBar = ({ partiTot }) => {
     if (!partiTot) return <span className="text-[11px] text-gray-400">Ingen stemmedata</span>;
-    const pArr = Object.values(partiTot);
+    const pArr   = Object.values(partiTot);
     const totFor = pArr.reduce((s, p) => s + (p.for || 0), 0);
     const totMot = pArr.reduce((s, p) => s + (p.mot || 0), 0);
-    const tot = totFor + totMot;
+    const tot    = totFor + totMot;
     if (!tot) return null;
-    const pct  = Math.round(totFor / tot * 100);
-    const ok   = totFor > totMot;
+    const pct = Math.round(totFor / tot * 100);
+    const ok  = totFor > totMot;
     return (
-      <div className="space-y-1">
+      <div className="space-y-1.5">
         <div className="flex items-center gap-2">
           <div className="flex-1 flex h-2 rounded-full overflow-hidden bg-gray-100">
             <div style={{ width: `${pct}%`, background: ok ? '#22c55e' : '#ef4444' }} />
@@ -6235,10 +6230,10 @@ function InternAnalyseFane({ sak }) {
         </div>
         <div className="flex flex-wrap gap-1">
           {pArr.filter(p => (p.for || 0) + (p.mot || 0) > 0).map(p => {
-            const farge   = PARTI_FARGER[p.id] || '#6b7280';
-            const stemme  = (p.for || 0) > (p.mot || 0) ? 'for' : (p.mot || 0) > (p.for || 0) ? 'mot' : 'delt';
-            const bg      = stemme === 'for' ? `${farge}22` : stemme === 'mot' ? '#ef444422' : '#6b728022';
-            const col     = stemme === 'for' ? farge : stemme === 'mot' ? '#dc2626' : '#6b7280';
+            const farge  = PARTI_FARGER[p.id] || '#6b7280';
+            const stemme = (p.for || 0) > (p.mot || 0) ? 'for' : (p.mot || 0) > (p.for || 0) ? 'mot' : 'delt';
+            const bg     = stemme === 'for' ? `${farge}22` : stemme === 'mot' ? '#ef444422' : '#6b728022';
+            const col    = stemme === 'for' ? farge         : stemme === 'mot' ? '#dc2626'   : '#6b7280';
             return (
               <span key={p.id} className="text-[10px] px-1.5 py-px rounded font-semibold"
                 style={{ background: bg, color: col }}>
@@ -6251,53 +6246,67 @@ function InternAnalyseFane({ sak }) {
     );
   };
 
-  return (
-    <div className="p-5 max-w-2xl space-y-6">
+  const tekstHarInnhold = tekst.trim().length > 20;
 
-      {status === 'idle' && (
-        <div className="flex flex-col items-center gap-4 py-8 text-center">
-          <div className="w-12 h-12 bg-violet-50 rounded-full flex items-center justify-center">
-            <svg className="w-6 h-6 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-            </svg>
-          </div>
-          <div>
-            <p className="font-medium text-gray-800 mb-1">Analyser lignende forslag</p>
-            <p className="text-sm text-gray-500 max-w-xs">
-              Identifiserer nøkkelord fra forslagene i saken og søker etter tilsvarende forslag i tidligere saker med voteringsutfall.
-            </p>
-          </div>
-          <button onClick={kjørAnalyse}
-            className="px-4 py-2 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700 font-medium">
-            Start analyse
+  return (
+    <div className="p-5 max-w-2xl space-y-5">
+
+      {/* ── Forslagstekst-input (alltid synlig) ── */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Forslagstekst</h3>
+          {ulagret && (
+            <span className="text-[11px] text-amber-600 font-medium">Ulagret</span>
+          )}
+          {!ulagret && tekst && (
+            <span className="text-[11px] text-gray-400">Lagret</span>
+          )}
+        </div>
+        <textarea
+          value={tekst}
+          onChange={e => { setTekst(e.target.value); setUlagret(true); }}
+          rows={6}
+          placeholder={"Lim inn de faktiske forslagene (kulepunktene) fra Dokument 8 eller innstillingen her.\n\nEksempel:\n«Stortinget ber regjeringen om å …»\n«Stortinget vedtar å …»\n\nTeksten lagres på saken og brukes til å finne lignende historiske forslag."}
+          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-700 resize-none focus:outline-none focus:ring-2 focus:ring-violet-300 placeholder-gray-300 leading-relaxed"
+        />
+        <div className="flex items-center justify-between mt-2">
+          <p className="text-[11px] text-gray-400">
+            {tekstHarInnhold
+              ? 'Analysen bruker nøkkelord fra teksten + sakens emnekategorier fra API-et.'
+              : 'Uten forslagstekst brukes kun sakstittel og emnekategorier — mindre presis analyse.'}
+          </p>
+          <button
+            onClick={kjørAnalyse}
+            disabled={status === 'kjorer'}
+            className="shrink-0 ml-3 px-4 py-1.5 bg-violet-600 text-white text-xs rounded-lg hover:bg-violet-700 font-medium disabled:opacity-50 transition-colors">
+            {status === 'kjorer' ? 'Analyserer…' : status === 'ferdig' ? 'Oppdater' : 'Analyser'}
           </button>
         </div>
-      )}
+      </div>
 
+      {/* ── Loading ── */}
       {status === 'kjorer' && (
-        <div className="flex flex-col items-center gap-3 py-10">
-          <Spinner />
+        <div className="flex items-center gap-3 py-4 border-t border-gray-100">
+          <Spinner liten />
           <p className="text-sm text-gray-600">{trinn}</p>
         </div>
       )}
 
+      {/* ── Feil ── */}
       {status === 'feil' && (
-        <div className="py-6 text-center">
-          <p className="text-red-600 font-medium mb-1">Analysen feilet</p>
-          <p className="text-sm text-gray-500 mb-3 whitespace-pre-wrap">{feil}</p>
-          <button onClick={kjørAnalyse} className="px-4 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200">
-            Prøv igjen
-          </button>
+        <div className="border border-red-100 bg-red-50 rounded-xl p-4">
+          <p className="text-sm text-red-700 font-medium mb-1">Analysen feilet</p>
+          <p className="text-xs text-red-600 whitespace-pre-wrap">{feil}</p>
         </div>
       )}
 
+      {/* ── Resultater ── */}
       {status === 'ferdig' && (
         <>
           {/* Nøkkelord */}
           {nøkkelord.length > 0 && (
-            <div>
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Nøkkelord</h3>
+            <div className="border-t border-gray-100 pt-5">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Nøkkelord brukt</h3>
               <div className="flex flex-wrap gap-1.5">
                 {nøkkelord.map(n => (
                   <span key={n} className="text-xs bg-violet-50 text-violet-700 border border-violet-100 px-2 py-0.5 rounded-full">
@@ -6308,81 +6317,38 @@ function InternAnalyseFane({ sak }) {
             </div>
           )}
 
-          {/* Forslag i denne saken */}
-          {egneForslag !== null && (
-            <div>
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                Forslag i denne saken
-                {egneForslag.length > 0 && <span className="ml-1.5 text-gray-400 normal-case font-normal">({egneForslag.length})</span>}
-              </h3>
-              {egneForslag.length === 0 ? (
-                <p className="text-sm text-gray-400 italic">
-                  Ingen forslag funnet ennå — saken er kanskje ikke votert.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {egneForslag.map((f, i) => (
-                    <div key={i} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] bg-white border border-gray-200 text-gray-500 px-1.5 py-px rounded font-mono">
-                          #{i + 1}
-                        </span>
-                        {f.parti?.id && <PartiBadge partiId={f.parti.id} partiNavn={f.parti.navn} />}
-                      </div>
-                      <p className="text-xs text-gray-700 leading-relaxed line-clamp-4">
-                        {stripHtml(f.forslagstekst_som_html || f.tekst || '')}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Lignende historiske saker */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                Lignende saker
-                {liknende.length > 0 && <span className="ml-1.5 text-gray-400 normal-case font-normal">({liknende.length})</span>}
-              </h3>
-              <button onClick={kjørAnalyse} className="text-xs text-gray-400 hover:text-gray-600 underline">
-                Kjør på nytt
-              </button>
-            </div>
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+              Lignende saker
+              {liknende.length > 0 && (
+                <span className="ml-1.5 text-gray-400 normal-case font-normal">({liknende.length} treff)</span>
+              )}
+            </h3>
 
             {liknende.length === 0 ? (
               <p className="text-sm text-gray-400 italic">
-                Ingen lignende saker funnet i de tre siste sesjonene.
+                Ingen lignende saker funnet. Prøv å legge til mer forslagstekst.
               </p>
             ) : (
               <div className="space-y-3">
                 {liknende.map((hit, i) => (
                   <div key={i} className="border border-gray-200 rounded-xl overflow-hidden">
-                    {/* Sak-header */}
-                    <div className="px-4 py-3 bg-gray-50 flex items-start gap-3">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-800 leading-snug" title={hit.apiSak.tittel}>
-                          {hit.apiSak.korttittel || hit.apiSak.tittel}
-                        </p>
-                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                          <span className="text-[11px] text-gray-400">#{hit.apiSak.id}</span>
-                          <span className="text-[11px] text-gray-400">·</span>
-                          <span className="text-[11px] text-gray-400">{hit.sesjonId}</span>
-                          <span className="text-[10px] bg-violet-50 text-violet-600 border border-violet-100 px-1.5 py-px rounded-full font-medium">
-                            {hit.score} nøkkelord
-                          </span>
-                        </div>
+                    <div className="px-4 py-3 bg-gray-50">
+                      <p className="text-sm font-medium text-gray-800 leading-snug" title={hit.apiSak.tittel}>
+                        {hit.apiSak.korttittel || hit.apiSak.tittel}
+                      </p>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <span className="text-[11px] text-gray-400">#{hit.apiSak.id} · {hit.sesjonId}</span>
+                        <span className="text-[10px] bg-violet-50 text-violet-600 border border-violet-100 px-1.5 py-px rounded-full font-medium">
+                          {hit.score} poeng
+                        </span>
                       </div>
                     </div>
-
-                    {/* Voteringsutfall */}
                     <div className="px-4 py-3 border-t border-gray-100">
                       <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-2">Voteringsutfall</p>
                       <UtfallBar partiTot={hit.partiTot} />
                     </div>
-
-                    {/* Forslag */}
                     {hit.forslag.length > 0 && (
                       <div className="px-4 py-3 border-t border-gray-100">
                         <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-2">
@@ -6395,9 +6361,7 @@ function InternAnalyseFane({ sak }) {
                             </p>
                           ))}
                           {hit.forslag.length > 3 && (
-                            <p className="text-[11px] text-gray-400 pl-2.5">
-                              + {hit.forslag.length - 3} forslag til
-                            </p>
+                            <p className="text-[11px] text-gray-400 pl-2.5">+ {hit.forslag.length - 3} til</p>
                           )}
                         </div>
                       </div>
@@ -6491,7 +6455,7 @@ function InternSakDetalj({ sak, oppdater, onSlett }) {
         {aktivFane === 'frister'  && <InternFristerFane  sak={sak} oppdater={oppdater} />}
         {aktivFane === 'notater'  && <InternNotatFane    sak={sak} oppdater={oppdater} />}
         {aktivFane === 'votering' && <InternVoteringFane sak={sak} oppdater={oppdater} />}
-        {aktivFane === 'analyse'  && <InternAnalyseFane  sak={sak} />}
+        {aktivFane === 'analyse'  && <InternAnalyseFane  sak={sak} oppdater={oppdater} />}
       </div>
     </div>
   );
