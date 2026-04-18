@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"dashboard finance charts\" --domain chart -n 5)",
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"modern soft fluid animation transitions\" --domain ux -n 5)",
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"react dashboard finance\" --stack react -n 5)",
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite:*)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(\"node_modules/.bin/tsc\" --noEmit)",
+      "Bash(cmd /c \"node_modules\\\\.bin\\\\tsc --noEmit\")",
+      "Bash(grep -v \"^Microsoft\\\\|^\\(c\\)\\\\|^\\\\s*$\\\\|^C:\\\\\\\\\\\\\\\\Users\")",
+      "Bash(node -e \"const {addQuarters} = require\\('date-fns'\\); console.log\\(addQuarters\\(new Date\\(\\), 1\\)\\)\")",
+      "Bash(ls node_modules/.bin/tsc*)",
+      "Bash(node_modules/.bin/tsc.cmd --noEmit)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"fintech investment portfolio dashboard analytics\" --design-system -p \"ProfitPath Investments\" -f markdown)",
+      "Bash(npm install:*)",
+      "Bash(npm list:*)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"government analytics dashboard professional political data visualization\" --design-system -p \"Stortinget Dashboard\" -f markdown)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"information dense sidebar navigation master detail\" --domain ux -n 6)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"bar chart cohesion matrix badge filter\" --domain chart -n 5)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"nextjs app router typescript\" --stack nextjs -n 10)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"sidebar filter search\" --stack shadcn -n 8)",
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --no-src-dir --import-alias \"@/*\" --yes)",
+      "Bash(mkdir -p legacy)",
+      "Bash(mv stortinget-dashboard.html legacy/)",
+      "Bash(mv Saker.xlsx legacy/)",
+      "Bash(npx shadcn@latest init --defaults)"
+    ]
+  }
+}
