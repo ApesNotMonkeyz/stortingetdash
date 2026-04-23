@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+.pytest_cache/
+.env
+
+# Nedlastede testdokumenter caches lokalt, men commites ikke
+tests/fixtures/*.pdf
+tests/fixtures/*.html
+tests/fixtures/spike/*.xml

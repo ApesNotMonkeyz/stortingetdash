@@ -1,0 +1,1309 @@
+           Claude Code v2.1.114
+ ▐▛███▜▌   Sonnet 4.6 · Claude Pro
+▝▜█████▛▘  ~\Documents\GitHub\parlytics\stortingetdash
+  ▘▘ ▝▝    Welcome to Opus 4.7 xhigh! · /effort to tune speed vs. intellige…
+
+❯ /effort                                                                       
+  ⎿  Set effort level to xhigh: Deeper reasoning than high, just below maximum
+     (Opus 4.7 only)
+
+❯ /model                                                                        
+  ⎿  Set model to Sonnet 4.6 (default)
+
+❯ /resume parlytics                                                             
+  ⎿  Session parlytics was not found.
+
+❯ Fix the BillDetail issues and implement details concerning each bill through  
+  the API-calling                                                               
+
+● Let me check the memory and current codebase state first.
+
+  Read 1 file, recalled 1 memory (ctrl+o to expand)
+
+● I can see the issues: liveBill! is referenced but never defined, and timeline
+  is used but not set for the live case. Let me explore the full codebase to
+  understand the API and types.
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+● Now let me read the merge.ts to understand the saksgang structure:
+
+  Read 1 file (ctrl+o to expand)
+
+● I can see the bugs clearly:
+  1. liveBill! is used but never defined (should be liveDetail)
+  2. timeline is used in JSX but only mockTimeline is defined
+  3. Live detail data (saksgang, proposers, keywords) isn't rendered at all
+
+  Let me now write the complete fix:
+
+● Update(components\dash\page-bills.tsx)
+  ⎿  Added 101 lines, removed 17 lines
+      416        desc: "Plenum",
+      417        future: bill.stage < 4,
+      418      },
+      419 -  ].filter((t) => t.date);                                    
+      419 +  ].filter((t) => t.date) as { date: string; label: string; de
+          +sc: string; future: boolean }[];                              
+      420  
+      421 +  // Live timeline derived from the saksgang steps. Each activ
+          +e step becomes one                                            
+      422 +  // entry; its date is the latest dated event within that ste
+          +p. Steps with no                                              
+      423 +  // dated events are shown as upcoming (future: true).       
+      424 +  const liveTimeline = liveDetail                             
+      425 +    ? liveDetail.saksgang.steps                               
+      426 +        .filter((s) => !s.uaktuell)                           
+      427 +        .map((s) => {                                         
+      428 +          const datedEvents = s.events.filter((e) => e.date !=
+          += null);                                                      
+      429 +          const latestDate = datedEvents.reduce<number | null>
+          +(                                                             
+      430 +            (best, e) => (e.date !== null && (best === null ||
+          + e.date > best) ? e.date : best),                             
+      431 +            null,                                             
+      432 +          );                                                  
+      433 +          const desc = datedEvents.map((e) => e.label).join(" 
+          +· ");                                                         
+      434 +          return {                                            
+      435 +            date: latestDate ? formatDate(latestDate) : null, 
+      436 +            label: s.name,                                    
+      437 +            desc,                                             
+      438 +            future: datedEvents.length === 0,                 
+      439 +          };                                                  
+      440 +        })                                                    
+      441 +    : null;                                                   
+      442 +                                                              
+      443 +  const timeline = isLive ? liveTimeline! : mockTimeline;     
+      444 +                                                              
+      445    return (
+      446      <Page
+      447        crumb={[{ label: "Saker", to: "bills" }, { label: displa
+           yReference }]}
+     ...
+      460            <span className="mono" style={{ fontSize: 12, color:
+            "var(--fg-dim)" }}>
+      461              {displayReference}
+      462            </span>
+      439 -          {isLive ? null : <StatusChip status={bill.status} />
+          -}                                                             
+      463 +          {isLive                                             
+      464 +            ? liveDetail!.statusLabel                         
+      465 +              ? <StatusChip status={liveDetail!.statusLabel} /
+          +>                                                             
+      466 +              : null                                          
+      467 +            : <StatusChip status={bill.status} />}            
+      468            {displayCategory ? <span className="chip">{displayCa
+           tegory}</span> : null}
+      469            {displayCommitteeName ? <span className="chip">{disp
+           layCommitteeName}</span> : null}
+      470 +          {isLive && liveDetail!.keywords.slice(0, 4).map((kw)
+          + => (                                                         
+      471 +            <span key={kw} className="chip" style={{ fontSize:
+          + 11, color: "var(--fg-dim)" }}>                               
+      472 +              {kw}                                            
+      473 +            </span>                                           
+      474 +          ))}                                                 
+      475          </div>
+      476          <h1 className="display" style={{ fontSize: 44, lineHei
+           ght: 1.05, maxWidth: 1000 }}>
+      477            {displayTitle}
+      478          </h1>
+      479        </div>
+      480  
+      448 -      {isLive ? null : (                                      
+      449 -        <div className="card" style={{ padding: 20, marginBott
+          -om: 24 }}>                                                    
+      450 -          <div className="eyebrow" style={{ marginBottom: 16 }
+          -}>                                                            
+      451 -            Saksgang                                          
+      452 -          </div>                                              
+      453 -          <StageBar stage={bill.stage} status={bill.status} />
+      481 +      <div className="card" style={{ padding: 20, marginBottom
+          +: 24 }}>                                                      
+      482 +        <div className="eyebrow" style={{ marginBottom: 16 }}>
+      483 +          Saksgang                                            
+      484          </div>
+      455 -      )}                                                      
+      485 +        <StageBar                                             
+      486 +          stage={isLive ? liveDetail!.stageNumber : bill.stage
+          +}                                                             
+      487 +          status={isLive ? (liveDetail!.statusLabel ?? "") : b
+          +ill.status}                                                   
+      488 +        />                                                    
+      489 +      </div>                                                  
+      490  
+      491        <div style={{ display: "grid", gridTemplateColumns: "1.6
+           fr 1fr", gap: 24 }}>
+      492          <div style={{ display: "flex", flexDirection: "column"
+           , gap: 24 }}>
+     ...
+      509                  A
+      510                </span>
+      511                <div className="eyebrow">AI-sammendrag</div>
+      478 -              {isLive ? <PreliminaryBadge /> : null}          
+      512 +              <PreliminaryBadge />                            
+      513              </div>
+      514              <p
+      515                style={{
+     ...
+      560                <div className="eyebrow">
+      561                  {vote ? "Avstemningsresultat" : "Forventet ste
+           mmegivning"}
+      562                </div>
+      529 -              {isLive ? <PreliminaryBadge /> : null}          
+      563 +              <PreliminaryBadge />                            
+      564              </div>
+      565              <h3 style={{ fontSize: 18, marginBottom: 16 }}>
+      566                {vote
+     ...
+      613                })}
+      614              </div>
+      615            </section>
+      616 +                                                              
+      617 +          {isLive && liveDetail!.proposers.length > 0 && (    
+      618 +            <section className="card" style={{ padding: 24 }}>
+      619 +              <div className="eyebrow" style={{ marginBottom: 
+          +14 }}>Forslagsstillere</div>                                  
+      620 +              <div style={{ display: "flex", flexDirection: "c
+          +olumn", gap: 8 }}>                                            
+      621 +                {liveDetail!.proposers.map((p) => (           
+      622 +                  <div                                        
+      623 +                    key={p.id}                                
+      624 +                    style={{                                  
+      625 +                      display: "flex",                        
+      626 +                      alignItems: "center",                   
+      627 +                      justifyContent: "space-between",        
+      628 +                      padding: "8px 0",                       
+      629 +                      borderTop: "1px solid var(--border)",   
+      630 +                      fontSize: 13,                           
+      631 +                    }}                                        
+      632 +                  >                                           
+      633 +                    <span>{p.name}</span>                     
+      634 +                    {p.partyName && (                         
+      635 +                      <span                                   
+      636 +                        style={{                              
+      637 +                          fontSize: 11,                       
+      638 +                          color: "var(--fg-dim)",             
+      639 +                          fontFamily: "var(--font-mono)",     
+      640 +                        }}                                    
+      641 +                      >                                       
+      642 +                        {p.partyName}                         
+      643 +                      </span>                                 
+      644 +                    )}                                        
+      645 +                  </div>                                      
+      646 +                ))}                                           
+      647 +              </div>                                          
+      648 +            </section>                                        
+      649 +          )}                                                  
+      650          </div>
+      651  
+      652          <div style={{ display: "flex", flexDirection: "column"
+           , gap: 24 }}>
+     ...
+      657              {(isLive
+      658                ? [
+      659                    ["Henvisning", displayReference],
+      592 -                  ["Tittel", liveBill!.shortTitle],           
+      660                    ["Type", displayCategory || "—"],
+      661                    ["Komité", displayCommitteeName || "—"],
+      662                    ["Sist oppdatert", displayUpdated],
+      596 -                  ["Sesjon", liveBill!.sessionId ?? "—"],     
+      597 -                  ["Status (kode)", String(liveBill!.statusCod
+          -e)],                                                          
+      663 +                  ["Sesjon", liveDetail!.sessionId ?? "—"],   
+      664 +                  ["Sak nr.", liveDetail!.sakNumber != null ? 
+          +String(liveDetail!.sakNumber) : "—"],                         
+      665 +                  ["Status (kode)", String(liveDetail!.statusC
+          +ode)],                                                        
+      666 +                  ["Ferdigbehandlet", liveDetail!.ferdigbehand
+          +let ? "Ja" : "Nei"],                                          
+      667                  ]
+      668                : [
+      669                    ["Saks-ID", bill.id],
+     ...
+      702                }}
+      703              >
+      704                <div className="eyebrow">Tidslinje</div>
+      636 -              {isLive ? <PreliminaryBadge /> : null}          
+      705 +              {!isLive && <PreliminaryBadge />}               
+      706              </div>
+      707              <div style={{ position: "relative", paddingLeft: 1
+           8 }}>
+      708                <div
+     ...
+      738                        letterSpacing: "0.08em",
+      739                      }}
+      740                    >
+      672 -                    {t.date}                                  
+      741 +                    {t.date ?? "Planlagt"}                    
+      742                    </div>
+      743                    <div style={{ fontSize: 13.5, fontWeight: 50
+           0 }}>{t.label}</div>
+      675 -                  <div style={{ fontSize: 12.5, color: "var(--
+          -fg-dim)" }}>{t.desc}</div>                                    
+      744 +                  {t.desc && (                                
+      745 +                    <div style={{ fontSize: 12.5, color: "var(
+          +--fg-dim)" }}>{t.desc}</div>                                  
+      746 +                  )}                                          
+      747                  </div>
+      748                ))}
+      749              </div>
+      750            </section>
+      751 +                                                              
+      752 +          {isLive && liveDetail!.keywords.length > 0 && (     
+      753 +            <section className="card" style={{ padding: 20 }}>
+      754 +              <div className="eyebrow" style={{ marginBottom: 
+          +12 }}>Stikkord</div>                                          
+      755 +              <div style={{ display: "flex", flexWrap: "wrap",
+          + gap: 6 }}>                                                   
+      756 +                {liveDetail!.keywords.map((kw) => (           
+      757 +                  <span key={kw} className="chip" style={{ fon
+          +tSize: 12 }}>                                                 
+      758 +                    {kw}                                      
+      759 +                  </span>                                     
+      760 +                ))}                                           
+      761 +              </div>                                          
+      762 +            </section>                                        
+      763 +          )}                                                  
+      764          </div>
+      765        </div>
+      766      </Page>
+
+● Now let me verify the fix compiles by checking for any remaining issues:
+
+● Bash(cd "C:\Users\Odin Elle\Documents\GitHub\parlytics\stortingetdash" && npx
+      tsc --noEmit 2>&1 | head -60)
+  ⎿  (No output)
+
+● Clean. The fixes applied:
+
+  1. liveBill! → liveDetail! — the undefined variable was the primary crash
+  cause
+  2. timeline defined — computed from liveDetail.saksgang.steps for live bills
+  (each non-uaktuell step becomes one timeline entry using its latest dated
+  event; undated steps show as "Planlagt"), or from mockTimeline for mock bills
+  3. StageBar shown for live — uses liveDetail.stageNumber (0–4 derived in
+  merge.ts) instead of only showing for mock
+  4. Status chip for live — shows statusLabel if the API provides a mapping,
+  else hides it
+  5. Keywords in header — first 4 keywords shown as chips next to the
+  category/committee chips
+  6. Proposers section — new card listing forslagsstiller_liste names and
+  parties when live data has proposers
+  7. Metadata row additions — sakNumber, ferdigbehandlet, and statusCode from
+  the detail endpoint
+  8. Keywords card in sidebar — full keyword list when live
+  9. Timeline future-step label — renders "Planlagt" instead of null
+
+✻ Worked for 3m 3s
+
+❯ Flott, la oss gå videre, men husk systemet rundt saker når vi kommer tilbake  
+  ift AI-summary og voteringspredikasjon. Vi går over til partier. Her må vi    
+  implementere funksjoner som gir oss et godt analytisk verktøy, men som        
+  likevel er mulig med tilgjengelige API-endepunkter. Hva tenker du             
+
+● La meg se på hva vi har tilgjengelig for partier i dag.
+
+  Read 2 files (ctrl+o to expand)
+
+● God timing å sjekke. Her er situasjonen:
+
+  Read 2 files (ctrl+o to expand)
+
+● Situasjonen er klar. Her er min vurdering:
+
+  Det vi allerede henter gratis (én cached dagensrepresentanter-kall som
+  allerede gjøres):
+  - kjoenn (kjønn, numerisk)
+  - foedselsdato (fødselsår via .NET-dato)
+  - fylke (valgkrets)
+  - vara_representant (vara/fast)
+  - komiteer_liste (komitémedlemskap per rep)
+
+  Dette er nok til å bygge genuint analytisk verdi uten ett eneste nytt
+  API-kall.
+
+  Mitt forslag — tre ting å implementere:
+
+  1. Komitéfotavtrykk (PartyDetail) — en tabell over hvilke komiteer partiet
+  sitter i og med hvor mange plasser. Viser parlamentarisk tyngde utover bare
+  mandattall. Krever null nye kall.
+  2. Demografi-panel (PartyDetail) — kjønnsandel (fra kjoenn),
+  gjennomsnittsalder (fra foedselsdato), vara-andel, og fylkesfordeling. Én
+  kompakt stat-rad + et lite distrikt-kart.
+  3. Live representantliste (PartyDetail) — bytte ut mock-data med ekte reps fra
+   /api/stortinget/representatives/full, allerede cachelagt.
+
+  Hva som ikke er mulig uten større arkitekturgrep:
+  Voteringsbassert analyse (partilojalitet, %-enighet) krever N kall per sak →
+  trenger en server-side aggregeringsjobb som precomputer dette, ikke noe vi kan
+   gjøre per-request.
+
+  Vil du at jeg implementerer de tre punktene over? Det er ryddig scope som gir
+  reell verdi med data vi allerede har.
+
+✻ Baked for 58s
+
+❯ Disse gir ikke veldig mye analytisk verdi, men jeg antar at det er fint å ha  
+  med uansett.                                                                  
+
+● Da implementerer jeg dem. La meg lese de filene jeg trenger å endre:
+
+  Read 2 files (ctrl+o to expand)
+● Greit — implementerer dem nå. Tre filer å endre: typer, merge-laget, og
+  party-siden.
+
+● Update(lib\stortinget\types.ts)
+  ⎿  Added 2 lines
+      37    fylke: string;
+      38    born: number;
+      39    committee: string;
+      40 +  committeeNames: string[];                                    
+      41 +  gender: number | null;                                       
+      42    role: string;
+      43    voteShare: number;
+      44    isVara: boolean;
+
+● Update(lib\stortinget\merge.ts)
+  ⎿  Added 4 lines, removed 2 lines
+       85  }
+       86  
+       87  function shapeRep(api: ApiRepresentative): MergedRepresentativ
+           e {
+       88 -  const committee = api.komiteer_liste?.[0];                  
+       88 +  const committees = api.komiteer_liste ?? [];                
+       89    return {
+       90      id: api.id,
+       91      name: `${api.fornavn} ${api.etternavn}`.trim(),
+       92      party: api.parti.id,
+       93      fylke: api.fylke.navn,
+       94      born: birthYear(api.foedselsdato ?? null),
+       95 -    committee: committee?.navn ?? "",                         
+       95 +    committee: committees[0]?.navn ?? "",                     
+       96 +    committeeNames: committees.map((c) => c.navn),            
+       97 +    gender: api.kjoenn ?? null,                               
+       98      role: api.vara_representant ? "Vara" : "Representant",
+       99      voteShare: Number.NaN,
+      100      isVara: api.vara_representant,
+
+● Now update PartyDetail to use live data:
+
+● Update(components\dash\page-parties.tsx)
+  ⎿  Added 6 lines, removed 1 line
+      10  } from "./data";
+      11  import { Page, Hemicycle, MultiLine, type Nav, type Params } fr
+          om "./components";
+      12  import { useApiResource } from "@/lib/stortinget/client";
+      13 -import type { MergedParty, MergedPartiesEnvelope } from "@/lib/
+         -stortinget/types";                                             
+      13 +import type {                                                  
+      14 +  MergedParty,                                                 
+      15 +  MergedPartiesEnvelope,                                       
+      16 +  MergedRepresentative,                                        
+      17 +  MergedRepsEnvelope,                                          
+      18 +} from "@/lib/stortinget/types";                               
+      19  
+      20  export function Parties({ onNav }: { onNav: Nav }) {
+      21    const live = useApiResource<MergedParty[], MergedPartiesEnvel
+          ope["meta"]>(
+
+● Update(components\dash\page-parties.tsx)
+  ⎿  Added 113 lines, removed 28 lines
+      212  }
+      213  
+      214  export function PartyDetail({ onNav, params }: { onNav: Nav; p
+           arams: Params }) {
+      215 -  const p = partyById(params.id);                             
+      216 -  const reps = REPRESENTATIVES.filter((r) => r.party === p.id)
+          -;                                                             
+      215 +  const liveParties = useApiResource<MergedParty[], MergedPart
+          +iesEnvelope["meta"]>(                                         
+      216 +    "/api/stortinget/parties/full",                           
+      217 +  );                                                          
+      218 +  const liveReps = useApiResource<MergedRepresentative[], Merg
+          +edRepsEnvelope["meta"]>(                                      
+      219 +    "/api/stortinget/representatives/full",                   
+      220 +  );                                                          
+      221 +                                                              
+      222 +  const mockParty = partyById(params.id);                     
+      223 +  const liveParty = liveParties.status === "ready"            
+      224 +    ? liveParties.data.find((p) => p.id === params.id)        
+      225 +    : undefined;                                              
+      226 +  const p: Party = liveParty ?? mockParty;                    
+      227 +                                                              
+      228    const agreement = AGREEMENT_SERIES[p.id] ?? [];
+      229    const lastAgreement = agreement[agreement.length - 1];
+      230  
+      231 +  const partyReps: MergedRepresentative[] =                   
+      232 +    liveReps.status === "ready"                               
+      233 +      ? liveReps.data.filter((r) => r.party === params.id)    
+      234 +      : [];                                                   
+      235 +  const isLiveReps = liveReps.status === "ready";             
+      236 +                                                              
+      237 +  // Committee breakdown — count seats per committee across al
+          +l party reps.                                                 
+      238 +  const committeeMap = new Map<string, number>();             
+      239 +  for (const rep of partyReps) {                              
+      240 +    for (const c of rep.committeeNames) {                     
+      241 +      committeeMap.set(c, (committeeMap.get(c) ?? 0) + 1);    
+      242 +    }                                                         
+      243 +  }                                                           
+      244 +  const committeeBreakdown = [...committeeMap.entries()].sort(
+          +(a, b) => b[1] - a[1]);                                       
+      245 +                                                              
+      246 +  // Demographics from live data. kjoenn: 1=mann, 2=kvinne (IS
+          +O 5218).                                                      
+      247 +  const currentYear = new Date().getFullYear();               
+      248 +  const femaleCount = partyReps.filter((r) => r.gender === 2).
+          +length;                                                       
+      249 +  const genderTotal = partyReps.filter((r) => r.gender != null
+          +).length;                                                     
+      250 +  const femaleShare = genderTotal > 0 ? femaleCount / genderTo
+          +tal : null;                                                   
+      251 +  const bornYears = partyReps.map((r) => r.born).filter((y) =>
+          + Number.isFinite(y));                                         
+      252 +  const avgAge =                                              
+      253 +    bornYears.length > 0                                      
+      254 +      ? Math.round(bornYears.reduce((s, y) => s + (currentYear
+          + - y), 0) / bornYears.length)                                 
+      255 +      : null;                                                 
+      256 +  const varaCount = partyReps.filter((r) => r.isVara).length; 
+      257 +                                                              
+      258 +  // Stat row — use live values when available, mock otherwise
+          +.                                                             
+      259 +  const mockReps = REPRESENTATIVES.filter((r) => r.party === p
+          +.id);                                                         
+      260 +  const statRows: [string, string | number][] = isLiveReps    
+      261 +    ? [                                                       
+      262 +        ["Representanter (fast)", partyReps.filter((r) => !r.i
+          +sVara).length],                                               
+      263 +        ["Vara", varaCount],                                  
+      264 +        ["Gjennomsnittsalder", avgAge != null ? `${avgAge} år`
+          + : "—"],                                                      
+      265 +        ["Kvinneandel", femaleShare != null ? `${(femaleShare 
+          +* 100).toFixed(0)}%` : "—"],                                  
+      266 +      ]                                                       
+      267 +    : [                                                       
+      268 +        ["Representanter", mockReps.length],                  
+      269 +        [                                                     
+      270 +          "Enighet m/ reg.",                                  
+      271 +          lastAgreement != null ? (lastAgreement * 100).toFixe
+          +d(0) + "%" : "—",                                             
+      272 +        ],                                                    
+      273 +        ["Komitéledere", mockReps.filter((r) => r.role.include
+          +s("leder")).length],                                          
+      274 +        ["Kvinneandel", "47%"],                               
+      275 +      ];                                                      
+      276 +                                                              
+      277    return (
+      278      <Page
+      279        crumb={[{ label: "Partier", to: "parties" }, { label: p.
+           short }]}
+     ...
+      350            marginBottom: 24,
+      351          }}
+      352        >
+      296 -        {[                                                    
+      297 -          ["Representanter", reps.length],                    
+      298 -          [                                                   
+      299 -            "Enighet m/ reg.",                                
+      300 -            lastAgreement != null ? (lastAgreement * 100).toFi
+          -xed(0) + "%" : "—",                                           
+      301 -          ],                                                  
+      302 -          ["Komitéledere", reps.filter((r) => r.role.includes(
+          -"leder")).length],                                            
+      303 -          ["Kvinneandel", "47%"],                             
+      304 -        ].map(([k, v], i) => (                                
+      353 +        {statRows.map(([k, v], i) => (                        
+      354            <div key={i} style={{ background: "var(--bg)", paddi
+           ng: "16px 20px" }}>
+      306 -            <div className="eyebrow" style={{ marginBottom: 6 
+          -}}>                                                           
+      307 -              {k}                                             
+      308 -            </div>                                            
+      309 -            <div className="display num" style={{ fontSize: 32
+          - }}>                                                          
+      310 -              {v}                                             
+      311 -            </div>                                            
+      355 +            <div className="eyebrow" style={{ marginBottom: 6 
+          +}}>{k}</div>                                                  
+      356 +            <div className="display num" style={{ fontSize: 32
+          + }}>{v}</div>                                                 
+      357            </div>
+      358          ))}
+      359        </div>
+     ...
+      366              </div>
+      367              <Hemicycle parties={PARTIES} highlightId={p.id} si
+           ze="md" />
+      368            </section>
+      369 +                                                              
+      370 +          {isLiveReps && committeeBreakdown.length > 0 && (   
+      371 +            <section className="card" style={{ overflow: "hidd
+          +en" }}>                                                       
+      372 +              <header style={{ padding: "16px 20px", borderBot
+          +tom: "1px solid var(--border)" }}>                            
+      373 +                <div className="eyebrow">Komitérepresentasjon<
+          +/div>                                                         
+      374 +                <h3 style={{ fontSize: 16, marginTop: 4 }}>   
+      375 +                  {committeeBreakdown.length} komiteer        
+      376 +                </h3>                                         
+      377 +              </header>                                       
+      378 +              {committeeBreakdown.map(([name, count], i) => ( 
+      379 +                <div                                          
+      380 +                  key={name}                                  
+      381 +                  style={{                                    
+      382 +                    display: "grid",                          
+      383 +                    gridTemplateColumns: "1fr auto",          
+      384 +                    padding: "10px 20px",                     
+      385 +                    gap: 12,                                  
+      386 +                    borderTop: i ? "1px solid var(--border)" :
+          + "none",                                                      
+      387 +                    alignItems: "center",                     
+      388 +                    fontSize: 13,                             
+      389 +                  }}                                          
+      390 +                >                                             
+      391 +                  <span>{name}</span>                         
+      392 +                  <span                                       
+      393 +                    className="mono"                          
+      394 +                    style={{                                  
+      395 +                      fontSize: 12,                           
+      396 +                      color: "var(--fg-dim)",                 
+      397 +                      background: "var(--bg-elev)",           
+      398 +                      padding: "2px 8px",                     
+      399 +                      borderRadius: 4,                        
+      400 +                    }}                                        
+      401 +                  >                                           
+      402 +                    {count} pl.                               
+      403 +                  </span>                                     
+      404 +                </div>                                        
+      405 +              ))}                                             
+      406 +            </section>                                        
+      407 +          )}                                                  
+      408 +                                                              
+      409            {agreement.length > 0 && (
+      410              <section className="card" style={{ padding: 24 }}>
+      411                <div className="eyebrow" style={{ marginBottom: 
+           4 }}>
+     ...
+      424            <header style={{ padding: "16px 20px", borderBottom:
+            "1px solid var(--border)" }}>
+      425              <div className="eyebrow">Representanter</div>
+      426              <h3 style={{ fontSize: 16, marginTop: 4 }}>
+      342 -              {reps.length} fra {p.short}                     
+      427 +              {isLiveReps ? partyReps.length : mockReps.length
+          +} fra {p.short}                                               
+      428 +              {!isLiveReps && <span style={{ color: "var(--fg-
+          +dim)", fontWeight: 400 }}> · mock</span>}                     
+      429              </h3>
+      430            </header>
+      345 -          {reps.map((r, i) => (                               
+      431 +          {(isLiveReps ? partyReps : mockReps).map((r, i) => (
+      432              <button
+      433                key={r.id}
+      434                onClick={() => onNav("rep", { id: r.id })}
+      435                style={{
+      436                  display: "grid",
+      351 -                gridTemplateColumns: "1fr 80px",              
+      437 +                gridTemplateColumns: "1fr auto",              
+      438                  padding: "12px 20px",
+      439                  gap: 12,
+      440                  width: "100%",
+     ...
+      455                    {r.fylke} · {r.role}
+      456                  </div>
+      457                </div>
+      372 -              <div                                            
+      373 -                className="mono num"                          
+      374 -                style={{ fontSize: 12, color: "var(--fg-dim)",
+          - textAlign: "right" }}                                        
+      375 -              >                                               
+      376 -                {(r.voteShare * 100).toFixed(0)}%             
+      377 -              </div>                                          
+      458 +              {!isLiveReps && (                               
+      459 +                <div className="mono num" style={{ fontSize: 1
+          +2, color: "var(--fg-dim)", textAlign: "right" }}>             
+      460 +                  {((r as typeof mockReps[number]).voteShare *
+          + 100).toFixed(0)}%                                            
+      461 +                </div>                                        
+      462 +              )}                                              
+      463              </button>
+      464            ))}
+      380 -          {!reps.length && (                                  
+      465 +          {isLiveReps && !partyReps.length && (               
+      466              <div style={{ padding: 20, color: "var(--fg-dim)",
+            fontSize: 13 }}>
+      382 -              Ingen representanter i datasettet.              
+      467 +              Ingen representanter funnet.                    
+      468              </div>
+      469            )}
+      470          </section>
+
+● Bash(cd "C:\Users\Odin Elle\Documents\GitHub\parlytics\stortingetdash" && npx
+      tsc --noEmit 2>&1)
+  ⎿  (No output)
+
+● Rent. Hva som er gjort:
+
+  types.ts / merge.ts — MergedRepresentative får to nye felt: committeeNames: 
+  string[] (alle komiteer, ikke bare første) og gender: number | null (fra
+  kjoenn-feltet i API-en).
+
+  PartyDetail — tre endringer:
+  - Stat-rad bytter til live-verdier når reps er lastet: fast/vara-split,
+  gjennomsnittsalder, og faktisk kvinneandel fra kjoenn-feltet. Mock-verdier
+  vises ellers.
+  - Komitérepresentasjon — ny seksjon i venstre kolonne som lister alle komiteer
+   partiet sitter i med plassantall, sortert synkende.
+  - Representantliste — bruker nå live-data fra
+  /api/stortinget/representatives/full med fallback til mock under lasting.
+
+✻ Worked for 2m 51s
+
+❯ Jeg vil at du bytter ut mandatdiagrammet til et parlamentsdiagram, som viser  
+  mandatene i bolk (fra v. R,SV,AP,MDG,SP,V,KRF,H,FRP). Dette må gjøres både på 
+   partier, og enkeltpartier, og på Dashboard. Den skal ha om lag 8 setter      
+  innerst og 33 ytterst.                                                        
+
+● La meg først se på den eksisterende hemicycle-komponenten og dashboard-siden.
+
+  Read 3 files (ctrl+o to expand)
+
+● Nå har jeg alt jeg trenger. Partienes API-IDer er R, SV, A, MDG, Sp, V, KrF,
+  H, FrP. La meg erstatte Hemicycle med en riktig parlamentsmodell og oppdatere
+  alle tre sidene.
+
+● Update(components\dash\components.tsx)
+  ⎿  Added 84 lines, removed 38 lines
+      207  }
+      208  
+      209  /* ---------- Hemicycle ---------- */
+      210 +// Political order left → right. Parties not in this list are 
+          +appended at the right end.                                    
+      211 +const HEMICYCLE_ORDER = ["R", "SV", "A", "MDG", "Sp", "V", "Kr
+          +F", "H", "FrP"];                                              
+      212 +                                                              
+      213  export function Hemicycle({
+      214    parties,
+      215    highlightId,
+      213 -  compact = false,                                            
+      216    size = "md",
+      215 -  sortOrder,                                                  
+      217  }: {
+      218    parties: Party[];
+      219    highlightId?: string;
+      219 -  compact?: boolean;                                          
+      220    size?: "sm" | "md" | "lg";
+      221 -  sortOrder?: string[];                                       
+      221  }) {
+      223 -  const ordered = sortOrder                                   
+      224 -    ? (sortOrder.map((id) => parties.find((p) => p.id === id))
+          -.filter(Boolean) as Party[])                                  
+      225 -    : [...parties].sort((a, b) => a.position.econ - b.position
+          -.econ);                                                       
+      222 +  const total = parties.reduce((s, p) => s + p.seats, 0);     
+      223 +  if (total === 0) return null;                               
+      224  
+      227 -  const seats: Array<{ partyId: string; color: string; x?: num
+          -ber; y?: number }> = [];                                      
+      228 -  ordered.forEach((p) => {                                    
+      229 -    for (let i = 0; i < p.seats; i++) seats.push({ partyId: p.
+          -id, color: p.color });                                        
+      230 -  });                                                         
+      225 +  // Arrange parties left → right by political order, then rem
+          +aining parties                                                
+      226 +  const ordered: Party[] = [                                  
+      227 +    ...HEMICYCLE_ORDER.flatMap((id) => {                      
+      228 +      const p = parties.find((q) => q.id === id);             
+      229 +      return p && p.seats > 0 ? [p] : [];                     
+      230 +    }),                                                       
+      231 +    ...parties.filter((p) => !HEMICYCLE_ORDER.includes(p.id) &
+          +& p.seats > 0),                                               
+      232 +  ];                                                          
+      233  
+      232 -  const ROWS = 7;                                             
+      233 -  const perRow = Math.ceil(seats.length / ROWS);              
+      234 +  // Build cumulative position slices in [0, 1]: each party oc
+          +cupies a fraction                                             
+      235 +  // proportional to its seat count, left (0) → right (1).    
+      236 +  const slices: { id: string; color: string; end: number }[] =
+          + [];                                                          
+      237 +  let cum = 0;                                                
+      238 +  for (const p of ordered) {                                  
+      239 +    cum += p.seats / total;                                   
+      240 +    slices.push({ id: p.id, color: p.color, end: cum });      
+      241 +  }                                                           
+      242 +  // Map political position t ∈ [0,1] to party                
+      243 +  const partyAt = (t: number) => {                            
+      244 +    for (const s of slices) if (t <= s.end) return s;         
+      245 +    return slices[slices.length - 1];                         
+      246 +  };                                                          
+      247 +                                                              
+      248 +  // SVG geometry — semi-circle, cx/cy at the flat bottom edge
+      249    const W = size === "lg" ? 640 : size === "sm" ? 320 : 480;
+      235 -  const H = W * 0.52;                                         
+      236 -  const cx = W / 2,                                           
+      237 -    cy = H * 0.94;                                            
+      238 -  const rMin = H * 0.42,                                      
+      239 -    rMax = H * 0.92;                                          
+      250 +  const H = Math.round(W * 0.52);                             
+      251 +  const cx = W / 2;                                           
+      252 +  // cy sits slightly below H so endpoint dots (at angle π and
+          + 0) aren't clipped                                            
+      253 +  const cy = H + 4;                                           
+      254  
+      241 -  const placed: Array<{ partyId: string; color: string; x: num
+          -ber; y: number }> = [];                                       
+      242 -  let idx = 0;                                                
+      255 +  // 8 rows; outer/inner radius ratio ≈ 33/8 so the innermost 
+          +row holds ~8 seats                                            
+      256 +  // and the outermost ~33 for Stortinget's 169 mandates.     
+      257 +  const ROWS = 8;                                             
+      258 +  const rMax = H * 0.92;                                      
+      259 +  const rMin = rMax * (8 / 33);                               
+      260 +                                                              
+      261 +  const radii = Array.from({ length: ROWS }, (_, i) =>        
+      262 +    rMin + (rMax - rMin) * (i / (ROWS - 1)),                  
+      263 +  );                                                          
+      264 +  const radiiSum = radii.reduce((s, r) => s + r, 0);          
+      265 +                                                              
+      266 +  // Seat count per row proportional to arc length (radius)   
+      267 +  let rowCounts = radii.map((r) => Math.floor((total * r) / ra
+          +diiSum));                                                     
+      268 +  // Distribute any remainder to rows with the highest fractio
+          +nal residuals                                                 
+      269 +  const residuals = radii                                     
+      270 +    .map((r, i) => ({ i, f: (total * r) / radiiSum - rowCounts
+          +[i] }))                                                       
+      271 +    .sort((a, b) => b.f - a.f);                               
+      272 +  let rem = total - rowCounts.reduce((s, n) => s + n, 0);     
+      273 +  for (let j = 0; rem > 0; j++, rem--) rowCounts[residuals[j].
+          +i]++;                                                         
+      274 +                                                              
+      275 +  // Place seats for each row                                 
+      276 +  const placed: { x: number; y: number; id: string; color: str
+          +ing }[] = [];                                                 
+      277    for (let r = 0; r < ROWS; r++) {
+      244 -    const rr = rMin + (rMax - rMin) * (r / (ROWS - 1));       
+      245 -    const n = Math.min(perRow, seats.length - idx);           
+      246 -    const startAngle = Math.PI;                               
+      247 -    const endAngle = 0;                                       
+      248 -    const step = (startAngle - endAngle) / Math.max(1, n - 1);
+      278 +    const n = rowCounts[r];                                   
+      279 +    if (n === 0) continue;                                    
+      280 +    const radius = radii[r];                                  
+      281      for (let i = 0; i < n; i++) {
+      250 -      const a = startAngle - step * i;                        
+      251 -      const x = cx + rr * Math.cos(a);                        
+      252 -      const y = cy - rr * Math.sin(a);                        
+      253 -      if (idx < seats.length) {                               
+      254 -        placed.push({ ...seats[idx], x, y });                 
+      255 -        idx++;                                                
+      256 -      }                                                       
+      282 +      const t = n > 1 ? i / (n - 1) : 0.5;                    
+      283 +      const party = partyAt(t);                               
+      284 +      // angle goes from π (left) to 0 (right) as t goes 0 → 1
+      285 +      const angle = Math.PI * (1 - t);                        
+      286 +      placed.push({                                           
+      287 +        x: cx + radius * Math.cos(angle),                     
+      288 +        y: cy - radius * Math.sin(angle),                     
+      289 +        id: party.id,                                         
+      290 +        color: party.color,                                   
+      291 +      });                                                     
+      292      }
+      293    }
+      294  
+      260 -  const seatR = compact ? 3 : 4;                              
+      295 +  const dotR = size === "sm" ? 3 : 4;                         
+      296 +                                                              
+      297    return (
+      262 -    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ displ
+          -ay: "block" }}>                                               
+      263 -      {placed.map((s, i) => {                                 
+      264 -        const dim = highlightId && s.partyId !== highlightId; 
+      265 -        return <circle key={i} cx={s.x} cy={s.y} r={seatR} fil
+          -l={s.color} opacity={dim ? 0.15 : 1} />;                      
+      266 -      })}                                                     
+      298 +    <svg                                                      
+      299 +      viewBox={`0 0 ${W} ${cy + dotR}`}                       
+      300 +      width="100%"                                            
+      301 +      style={{ display: "block" }}                            
+      302 +    >                                                         
+      303 +      {placed.map((s, i) => (                                 
+      304 +        <circle                                               
+      305 +          key={i}                                             
+      306 +          cx={s.x}                                            
+      307 +          cy={s.y}                                            
+      308 +          r={dotR}                                            
+      309 +          fill={s.color}                                      
+      310 +          opacity={highlightId && s.id !== highlightId ? 0.12 
+          +: 1}                                                          
+      311 +        />                                                    
+      312 +      ))}                                                     
+      313      </svg>
+      314    );
+      315  }
+
+● Nå erstattes Compass-kortet på partilisten og oppdateres Hemicycle-kallet i
+  PartyDetail:
+
+● Update(components\dash\page-parties.tsx)
+  ⎿  Added 43 lines, removed 5 lines
+       49              display: "flex",
+       50              justifyContent: "space-between",
+       51              alignItems: "baseline",
+       52 -            marginBottom: 12,                                 
+       52 +            marginBottom: 16,                                 
+       53            }}
+       54          >
+       55            <div>
+       56 -            <div className="eyebrow">Politisk kompass</div>   
+       57 -            <h3 style={{ fontSize: 18, marginTop: 4 }}>Økonomi
+          -sk vs. sosial posisjon</h3>                                   
+       56 +            <div className="eyebrow">Parlamentssammensetning</
+          +div>                                                          
+       57 +            <h3 style={{ fontSize: 18, marginTop: 4 }}>{total}
+          + mandater · fra v. R → FrP</h3>                               
+       58            </div>
+       59            <div className="mono" style={{ fontSize: 11, color: 
+           "var(--fg-dim)" }}>
+       60 -            basert på voteringsmønstre                        
+       60 +            {sourceLabel}                                     
+       61            </div>
+       62          </div>
+       63 -        <Compass parties={parties} onNav={onNav} />           
+       63 +        <Hemicycle parties={parties} size="lg" />             
+       64 +        <div                                                  
+       65 +          style={{                                            
+       66 +            display: "flex",                                  
+       67 +            flexWrap: "wrap",                                 
+       68 +            gap: "6px 16px",                                  
+       69 +            marginTop: 14,                                    
+       70 +            justifyContent: "center",                         
+       71 +          }}                                                  
+       72 +        >                                                     
+       73 +          {sorted.map((p) => (                                
+       74 +            <button                                           
+       75 +              key={p.id}                                      
+       76 +              onClick={() => onNav("party", { id: p.id })}    
+       77 +              style={{                                        
+       78 +                display: "flex",                              
+       79 +                alignItems: "center",                         
+       80 +                gap: 6,                                       
+       81 +                background: "none",                           
+       82 +                border: 0,                                    
+       83 +                cursor: "pointer",                            
+       84 +                color: "inherit",                             
+       85 +                fontSize: 12,                                 
+       86 +                padding: "2px 4px",                           
+       87 +                borderRadius: 4,                              
+       88 +              }}                                              
+       89 +              onMouseEnter={(e) => (e.currentTarget.style.back
+          +ground = "var(--bg-elev)")}                                   
+       90 +              onMouseLeave={(e) => (e.currentTarget.style.back
+          +ground = "transparent")}                                      
+       91 +            >                                                 
+       92 +              <span                                           
+       93 +                style={{ width: 8, height: 8, borderRadius: "5
+          +0%", background: p.color, flexShrink: 0 }}                    
+       94 +              />                                              
+       95 +              <span style={{ fontFamily: "var(--font-mono)", c
+          +olor: "var(--fg-muted)" }}>                                   
+       96 +                {p.short}                                     
+       97 +              </span>                                         
+       98 +              <span className="mono num" style={{ color: "var(
+          +--fg-dim)" }}>{p.seats}</span>                                
+       99 +            </button>                                         
+      100 +          ))}                                                 
+      101 +        </div>                                                
+      102        </div>
+      103  
+      104        <div
+
+● Nå fjernes Compass-funksjonen og importene den trengte, og Hemicycle i
+  PartyDetail oppdateres til å bruke live-data:
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Good, Compass is only defined but no longer used. Let me read around line 193
+  to remove it, and find the Hemicycle call in PartyDetail:
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Now make both edits — remove Compass and fix the Hemicycle call:
+
+● Update(components\dash\page-parties.tsx)
+  ⎿  Removed 58 lines
+      190    );
+      191  }
+      192  
+      193 -function Compass({ parties, onNav }: { parties: Party[]; onNav
+          -: Nav }) {                                                    
+      194 -  const W = 900,                                              
+      195 -    H = 400;                                                  
+      196 -  const pad = 48;                                             
+      197 -  const toX = (v: number) => pad + ((v + 1) / 2) * (W - pad * 
+          -2);                                                           
+      198 -  const toY = (v: number) => pad + (1 - (v + 1) / 2) * (H - pa
+          -d * 2);                                                       
+      199 -  return (                                                    
+      200 -    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ displ
+          -ay: "block" }}>                                               
+      201 -      <line x1={pad} y1={H / 2} x2={W - pad} y2={H / 2} stroke
+          -="var(--border)" />                                           
+      202 -      <line x1={W / 2} y1={pad} x2={W / 2} y2={H - pad} stroke
+          -="var(--border)" />                                           
+      203 -      {[-0.5, 0.5].map((v) => (                               
+      204 -        <g key={v}>                                           
+      205 -          <line x1={toX(v)} y1={pad} x2={toX(v)} y2={H - pad} 
+          -stroke="var(--border)" strokeDasharray="2,4" />               
+      206 -          <line x1={pad} y1={toY(v)} x2={W - pad} y2={toY(v)} 
+          -stroke="var(--border)" strokeDasharray="2,4" />               
+      207 -        </g>                                                  
+      208 -      ))}                                                     
+      209 -      <text x={pad} y={H / 2 - 10} fontSize="10.5" fill="var(-
+          --fg-dim)" fontFamily="var(--font-mono)">                      
+      210 -        ← venstre                                             
+      211 -      </text>                                                 
+      212 -      <text                                                   
+      213 -        x={W - pad}                                           
+      214 -        y={H / 2 - 10}                                        
+      215 -        fontSize="10.5"                                       
+      216 -        fill="var(--fg-dim)"                                  
+      217 -        fontFamily="var(--font-mono)"                         
+      218 -        textAnchor="end"                                      
+      219 -      >                                                       
+      220 -        høyre →                                               
+      221 -      </text>                                                 
+      222 -      <text x={W / 2 + 8} y={pad + 12} fontSize="10.5" fill="v
+          -ar(--fg-dim)" fontFamily="var(--font-mono)">                  
+      223 -        ↑ liberal                                             
+      224 -      </text>                                                 
+      225 -      <text x={W / 2 + 8} y={H - pad - 4} fontSize="10.5" fill
+          -="var(--fg-dim)" fontFamily="var(--font-mono)">               
+      226 -        ↓ konservativ                                         
+      227 -      </text>                                                 
+      228 -      {parties.map((p) => {                                   
+      229 -        const r = 8 + Math.sqrt(p.seats) * 2.5;               
+      230 -        return (                                              
+      231 -          <g key={p.id} onClick={() => onNav("party", { id: p.
+          -id })} style={{ cursor: "pointer" }}>                         
+      232 -            <circle cx={toX(p.position.econ)} cy={toY(p.positi
+          -on.social)} r={r} fill={p.color} opacity="0.85" />            
+      233 -            <text                                             
+      234 -              x={toX(p.position.econ)}                        
+      235 -              y={toY(p.position.social) + 3}                  
+      236 -              fontSize="10"                                   
+      237 -              fontFamily="var(--font-mono)"                   
+      238 -              fontWeight="600"                                
+      239 -              fill="white"                                    
+      240 -              textAnchor="middle"                             
+      241 -              style={{ pointerEvents: "none" }}               
+      242 -            >                                                 
+      243 -              {p.short}                                       
+      244 -            </text>                                           
+      245 -          </g>                                                
+      246 -        );                                                    
+      247 -      })}                                                     
+      248 -    </svg>                                                    
+      249 -  );                                                          
+      250 -}                                                             
+      193  
+      194  export function PartyDetail({ onNav, params }: { onNav: Nav; p
+           arams: Params }) {
+      195    const liveParties = useApiResource<MergedParty[], MergedPart
+           iesEnvelope["meta"]>(
+
+● Update(components\dash\page-parties.tsx)
+  ⎿  Added 9 lines, removed 1 line
+      344              <div className="eyebrow" style={{ marginBottom: 14
+            }}>
+      345                Posisjon i salen
+      346              </div>
+      347 -            <Hemicycle parties={PARTIES} highlightId={p.id} si
+          -ze="md" />                                                    
+      347 +            <Hemicycle                                        
+      348 +              parties={                                       
+      349 +                liveParties.status === "ready"                
+      350 +                  ? liveParties.data.filter((q) => q.seats > 0
+          +)                                                             
+      351 +                  : PARTIES                                   
+      352 +              }                                               
+      353 +              highlightId={p.id}                              
+      354 +              size="md"                                       
+      355 +            />                                                
+      356            </section>
+      357  
+      358            {isLiveReps && committeeBreakdown.length > 0 && (
+
+● Bash(cd "C:\Users\Odin Elle\Documents\GitHub\parlytics\stortingetdash" && npx
+      tsc --noEmit 2>&1)
+  ⎿  (No output)
+
+● Rent. Her er hva som ble gjort:
+
+  Ny Hemicycle-algoritme — erstattet den gamle ensraden-fordeling med en riktig
+  parlamentsmodell:
+  - 8 rader, innerste radius × 33/8 = ytterste radius, slik at radetellingen
+  blir ~8 innerst og ~34 ytterst for 169 mandater
+  - Mandat-per-rad beregnes proporsjonalt med buens lengde (radius), med Largest
+   Remainder-fordeling for å treffe nøyaktig totaltall
+  - Innenfor hver rad: hvert sete får politisk posisjon t ∈ [0,1], og tilordnes
+  partiet hvis kumulerte andel dekker t — dette gir rene bolker (R, SV, Ap, MDG,
+   Sp, V, KrF, H, FrP) gjennom alle radene
+  - highlightId dimmer alle andre partier til 12% opacity (brukes i PartyDetail)
+
+  Partier-siden — Compass-kortet erstattet med Hemicycle (size="lg") + en
+  kompakt partilegend med klikk-navigasjon
+
+  PartyDetail — Hemicycle bruker nå live-data hvis tilgjengelig, med fallback
+  til mock
+✻ Crunched for 7m 51s
+
+※ recap: Building a live Stortinget parliamentary dashboard wired to the real API. We've implemented bill details, party demographics, and a proper hemicycle diagram with political seat blocks. Next up is the representatives page. (disable recaps in /config)
+
+❯ Jeg har utarbeidet noen MD filer som skal brukes når vi nå skal bygge         
+  AI-sammendrag av sakene. Les CLAUDE.md og alle filer i docs/. Gi meg et kort  
+  sammendrag av hva du har forstått om prosjektet, og foreslå hvilket steg vi   
+  bør bygge først. Ikke skriv kode ennå.                                        
+
+  Searched for 1 pattern, read 7 files (ctrl+o to expand)
+
+● Her er min forståelse:
+
+  ---
+  Hva dette er: En Python/FastAPI-backend som tar en Stortinget sak-ID, henter
+  metadata + PDF via Stortingets API, og kjører det gjennom en femdelt
+  analysepipeline med Claude. Resultatet er strukturert JSON (Pydantic-validert)
+   med sammendrag, forslagspunkter med forpliktelsesgrad, argumentasjonsanalyse
+  og politiske dimensjoner — sistnevnte eksplisitt merket som tolkning.
+
+  Viktigste designvalg i doc-ene:
+  - PDF sendes direkte til Claude som type: "document" — ingen tekstekstraksjon
+  - Strukturert output via tool use, ikke frihåndsparsing
+  - Hvert pipeline-steg er isolert med typede inn-/utdata
+  - Norsk i prompts, temperature=0, claude-opus-4-7
+  - Prompt-versjon inkludert i cache-nøkkel
+  - Prediksjon av partiholdninger er bevisst ute av scope nå
+
+  ---
+  Anbefalt første steg: Steg 1 — Dokumentinntak
+
+  Det er det eneste steget uten Claude-avhengighet. Det etablerer:
+  - Prosjektstruktur og pyproject.toml
+  - Settings-config (Pydantic-settings, env)
+  - Stortinget API-klient (httpx, JSON, rate limit-håndtering)
+  - Saksdokument-modellen som alle etterfølgende steg konsumerer
+  - PDF-henting og fallback til HTML
+
+  Og det kan verifiseres umiddelbart mot sak 47163 uten å bruke et eneste
+  Claude-kall. Feil her (feil feltnavn, feil PDF-URL-logikk) er billige å
+  oppdage nå — ikke etter at vi har bygget tre promptsteg på toppen.
+
+  Vil du at jeg starter?
+
+✻ Worked for 46s
+
+❯ Sett opp grunnstruktur for prosjektet: pyproject.toml med avhengigheter,      
+  mappestruktur som beskrevet i kodekonvensjoner.md, og en tom FastAPI-app som  
+  starter. Ikke implementer analyselogikk ennå.                                 
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Ingen Python-kode ennå. Legger alt i backend/ i samme repo. Skriver alle
+  filene parallelt:
+
+● Write(backend\pyproject.toml)
+  ⎿  Wrote 36 lines to backend\pyproject.toml
+       1 [project]
+       2 name = "saksanalyse"
+       3 version = "0.1.0"
+       4 description = "AI-drevet analyse av norske stortingssaker"
+       5 requires-python = ">=3.11"
+       6 dependencies = [
+       7     "fastapi>=0.115",
+       8     "uvicorn[standard]>=0.32",
+       9     "pydantic>=2.10",
+      10     "pydantic-settings>=2.7",
+     … +26 lines (ctrl+o to expand)
+
+● Write(backend\.env.example)
+  ⎿  Wrote 6 lines to backend\.env.example
+      1 ANTHROPIC_API_KEY=sk-ant-...
+      2 CLAUDE_MODEL=claude-opus-4-7
+      3 STORTINGET_BASE_URL=https://data.stortinget.no
+      4 STORTINGET_DOC_BASE_URL=https://www.stortinget.no
+      5 USER_AGENT=saksanalyse/0.1 (kontakt: din@epost.no)
+      6 LOG_LEVEL=INFO
+
+● Write(backend\.gitignore)
+  ⎿  Wrote 11 lines to backend\.gitignore
+       1 __pycache__/
+       2 *.py[cod]
+       3 *.egg-info/
+       4 dist/
+       5 .venv/
+       6 .pytest_cache/
+       7 .env
+       8 
+       9 # Nedlastede testdokumenter caches lokalt, men commites ikke
+      10 tests/fixtures/*.pdf
+     … +1 line (ctrl+o to expand)
+
+● Write(backend\app\config.py)
+  ⎿  Wrote 21 lines to backend\app\config.py
+      1 from __future__ import annotations
+      2 
+      3 from functools import lru_cache
+      4 
+      5 from pydantic_settings import BaseSettings, SettingsConfigDict
+      6 
+      7 
+      8 class Settings(BaseSettings):
+      9     model_config = SettingsConfigDict(env_file=".env", extra="ign
+        ore")
+     … +13 lines (ctrl+o to expand)
+
+● Write(backend\app\main.py)
+  ⎿  Wrote 37 lines to backend\app\main.py
+       1 from __future__ import annotations
+       2 
+       3 import structlog
+       4 import structlog.stdlib
+       5 import uvicorn
+       6 from fastapi import FastAPI
+       7 
+       8 from app.api.routes import router
+       9 
+      10 structlog.configure(
+     … +28 lines (ctrl+o to expand)
+
+● Write(backend\app\api\routes.py)
+  ⎿  Wrote 7 lines to backend\app\api\routes.py
+      1 from __future__ import annotations
+      2 
+      3 from fastapi import APIRouter
+      4 
+      5 router = APIRouter()
+      6 
+      7 # Analyserouter implementeres i neste steg (dokumentinntak + pipe
+        line)
+
+● Write(backend\app\__init__.py)
+  ⎿  Wrote 1 lines to backend\app\__init__.py
+      1 (No content)
+
+● Write(backend\app\api\__init__.py)
+  ⎿  Wrote 1 lines to backend\app\api\__init__.py
+      1 (No content)
+
+● Write(backend\app\models\__init__.py)
+  ⎿  Wrote 1 lines to backend\app\models\__init__.py
+      1 (No content)
+
+● Write(backend\app\services\__init__.py)
+  ⎿  Wrote 1 lines to backend\app\services\__init__.py
+      1 (No content)
+
+● Write(backend\app\steps\__init__.py)
+  ⎿  Wrote 1 lines to backend\app\steps\__init__.py
+      1 (No content)
+
+● Write(backend\app\prompts\__init__.py)
+  ⎿  Wrote 1 lines to backend\app\prompts\__init__.py
+      1 (No content)
+
+● Write(backend\app\models\sak.py)
+  ⎿  Wrote 4 lines to backend\app\models\sak.py
+      1 from __future__ import annotations
+      2 
+      3 # Implementeres i steg 1 (dokumentinntak).
+      4 # Vil inneholde: Saksdokument, Publikasjon, Dokumentgruppe
+
+● Write(backend\app\models\forslag.py)  ⎿  Wrote 4 lines to backend\app\models\forslag.py
+      1 from __future__ import annotations
+      2 
+      3 # Implementeres i steg 3 (forslagsekstraksjon).
+      4 # Vil inneholde: Forslagspunkt, Forpliktelsesgrad
+
+● Write(backend\app\models\analyse.py)
+  ⎿  Wrote 4 lines to backend\app\models\analyse.py
+      1 from __future__ import annotations
+      2 
+      3 # Implementeres i steg 2–5 (strukturering → politisk kontekst).
+      4 # Vil inneholde: DokumentStruktur, Innholdsanalyse, PolitiskKonte
+        kst, Saksanalyse
+
+● Write(backend\app\services\stortinget.py)
+  ⎿  Wrote 4 lines to backend\app\services\stortinget.py
+      1 from __future__ import annotations
+      2 
+      3 # Implementeres i steg 1 (dokumentinntak).
+      4 # Vil inneholde: StortingetClient — httpx-klient mot data.stortin
+        get.no
+
+● Write(backend\app\services\claude.py)
+  ⎿  Wrote 4 lines to backend\app\services\claude.py
+      1 from __future__ import annotations
+      2 
+      3 # Implementeres i steg 2 (strukturering).
+      4 # Vil inneholde: ClaudeClient — innpakning av Anthropic SDK med t
+        ool use og prompt caching
+
+● Write(backend\app\services\pipeline.py)
+  ⎿  Wrote 4 lines to backend\app\services\pipeline.py
+      1 from __future__ import annotations
+      2 
+      3 # Implementeres sist — orkestrerer steg 1–5 i sekvens.
+      4 # Vil inneholde: run_pipeline(sak_id) -> Saksanalyse
+
+● Write(backend\app\steps\dokumentinntak.py)
+  ⎿  Wrote 6 lines to backend\app\steps\dokumentinntak.py
+      1 from __future__ import annotations
+      2 
+      3 # Steg 1: Hent saksmetadata fra data.stortinget.no, identifiser p
+        ublikasjon,
+      4 # last ned PDF fra stortinget.no.
+      5 # Input:  sak_id: str
+      6 # Output: Saksdokument
+
+● Write(backend\app\steps\strukturering.py)
+  ⎿  Wrote 5 lines to backend\app\steps\strukturering.py
+      1 from __future__ import annotations
+      2 
+      3 # Steg 2: Send PDF til Claude, ekstraher dokumentets seksjonsstru
+        ktur.
+      4 # Input:  Saksdokument
+      5 # Output: DokumentStruktur
+
+● Write(backend\app\steps\forslagsekstraksjon.py)
+  ⎿  Wrote 5 lines to backend\app\steps\forslagsekstraksjon.py
+      1 from __future__ import annotations
+      2 
+      3 # Steg 3: Isoler hvert forslagspunkt med forpliktelsesgrad.
+      4 # Input:  DokumentStruktur
+      5 # Output: list[Forslagspunkt]
+
+● Write(backend\app\steps\innholdsanalyse.py)
+  ⎿  Wrote 5 lines to backend\app\steps\innholdsanalyse.py
+      1 from __future__ import annotations
+      2 
+      3 # Steg 4: Sammendrag, argumentasjon og verdier forslagstillerne b
+        ygger på.
+      4 # Input:  DokumentStruktur + list[Forslagspunkt]
+      5 # Output: Innholdsanalyse
+
+● Write(backend\app\steps\politisk_kontekst.py)
+  ⎿  Wrote 6 lines to backend\app\steps\politisk_kontekst.py
+      1 from __future__ import annotations
+      2 
+      3 # Steg 5: Politiske dimensjoner og kobling til eksisterende polit
+        ikk.
+      4 # Eksplisitt merket som tolkning med sikkerhet-felt.
+      5 # Input:  Innholdsanalyse
+      6 # Output: PolitiskKontekst
+  ⎿  You're out of extra usage · resets 10pm (Europe/Oslo)
+     /upgrade to increase your usage limit.
+
+✻ Brewed for 1m 46s

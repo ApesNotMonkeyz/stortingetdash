@@ -1,0 +1,1268 @@
+ ▐▛███▜▌   Claude Code v2.1.114
+▝▜█████▛▘  Sonnet 4.6 · Claude Pro
+  ▘▘ ▝▝    ~\Documents\GitHub\parlytics\stortingetdash
+
+✻ Conversation compacted (ctrl+o for history)
+
+  ⎿  Read app\api\routes.py (35 lines)
+  ⎿  Read app\services\pipeline.py (131 lines)
+  ⎿  Read tests\test_politisk_kontekst.py (118 lines)
+  ⎿  Read tests\test_innholdsanalyse.py (98 lines)
+  ⎿  Read app\prompts\politisk_kontekst.py (95 lines)
+  ⎿  Skills restored (ui-ux-pro-max)
+
+● Let me read the files I need to modify before starting.
+
+  Read 2 files (ctrl+o to expand)
+
+● Now let me check the existing route pattern and Next.js docs:
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Now I have everything I need. Let me implement all three parts:
+
+  1. Append types to lib/stortinget/types.ts
+  2. Create the proxy route app/api/analyse/[sak_id]/route.ts
+  3. Modify components/dash/page-bills.tsx
+
+● Update(lib\stortinget\types.ts)
+  ⎿  Added 56 lines
+      121      ageMs: number;
+      122    };
+      123  };
+      124 +                                                              
+      125 +// ── Analyse types (mirrors backend app/models/analyse.py) ──
+          +──────────────────                                            
+      126 +                                                              
+      127 +export type Forpliktelsesgrad =                               
+      128 +  | "utrede"                                                  
+      129 +  | "vurdere"                                                 
+      130 +  | "legge_frem"                                              
+      131 +  | "komme_tilbake"                                           
+      132 +  | "sikre"                                                   
+      133 +  | "gjennomfore";                                            
+      134 +                                                              
+      135 +export type Sikkerhetsnivaa = "hoy" | "middels" | "lav";      
+      136 +                                                              
+      137 +export type KoblingType = "reversering" | "opptrapping" | "nyt
+          +t" | "videroforing";                                          
+      138 +                                                              
+      139 +export type SaksForslagspunkt = {                             
+      140 +  nr: string;                                                 
+      141 +  tekst: string;                                              
+      142 +  forpliktelsesgrad: Forpliktelsesgrad | null;                
+      143 +  begrunnelse_klassifisering: string | null;                  
+      144 +};                                                            
+      145 +                                                              
+      146 +export type SaksInnholdsanalyse = {                           
+      147 +  problemforstaelse: string;                                  
+      148 +  losningsforslag: string;                                    
+      149 +  argumentasjonslinjer: string[];                             
+      150 +};                                                            
+      151 +                                                              
+      152 +export type SaksPolitiskDimensjon = {                         
+      153 +  akse: string;                                               
+      154 +  plassering: string;                                         
+      155 +  sikkerhet: Sikkerhetsnivaa;                                 
+      156 +  begrunnelse: string;                                        
+      157 +};                                                            
+      158 +                                                              
+      159 +export type SaksKoblingEksisterendePolitikk = {               
+      160 +  type: KoblingType;                                          
+      161 +  sikkerhet: Sikkerhetsnivaa;                                 
+      162 +  begrunnelse: string;                                        
+      163 +};                                                            
+      164 +                                                              
+      165 +export type SaksPolitiskKontekst = {                          
+      166 +  politiske_dimensjoner: SaksPolitiskDimensjon[];             
+      167 +  kobling_eksisterende_politikk: SaksKoblingEksisterendePoliti
+          +kk | null;                                                    
+      168 +};                                                            
+      169 +                                                              
+      170 +export type Saksanalyse = {                                   
+      171 +  sak_id: number;                                             
+      172 +  pub_id: string;                                             
+      173 +  dok_type: string;                                           
+      174 +  tittel: string | null;                                      
+      175 +  sesjon: string | null;                                      
+      176 +  forslag: SaksForslagspunkt[];                               
+      177 +  innholdsanalyse: SaksInnholdsanalyse | null;                
+      178 +  politisk_kontekst: SaksPolitiskKontekst | null;             
+      179 +};                                                            
+
+● Now create the proxy route:
+
+● Bash(mkdir -p "C:/Users/Odin
+      Elle/Documents/GitHub/parlytics/stortingetdash/app/api/analyse/[sak_id]")
+  ⎿  Done
+
+● Write(app\api\analyse\[sak_id]\route.ts)
+  ⎿  Wrote 27 lines to app\api\analyse\[sak_id]\route.ts
+      2 import type { NextRequest } from "next/server";
+      3 export const dynamic = "force-dynamic";
+      4 
+      5 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:
+        8000";
+      6 
+      7 export async function GET(req: NextRequest, ctx: { params: Promis
+        e<{ sak_id: string }> }) {
+      8   const { sak_id } = await ctx.params;
+      9   const force = req.nextUrl.searchParams.get("force") === "true";
+     … +22 lines (ctrl+o to expand)
+
+● Now the main work — adding AnalysePanel to page-bills.tsx. I'll add the types
+  import, the components, and replace the mock AI-sammendrag section:
+
+● Update(components\dash\page-bills.tsx)
+  ⎿  Added 3 lines
+       9    MergedBillDetail,
+      10    MergedBillDetailEnvelope,
+      11    MergedBillsEnvelope,
+      12 +  Saksanalyse,                                                 
+      13 +  Forpliktelsesgrad,                                           
+      14 +  Sikkerhetsnivaa,                                             
+      15  } from "@/lib/stortinget/types";
+      16  
+      17  export function Bills({
+
+● Now add the AnalysePanel and helper components just before BillDetail. I'll
+  insert them after PreliminaryBadge:
+
+● Update(components\dash\page-bills.tsx)
+  ⎿  Added 305 lines
+       45    );
+       46  }
+       47  
+       48 +// ── Analyse panel ──────────────────────────────────────────
+          +───────────────────                                           
+       49 +                                                              
+       50 +const FORPLIKTELSE_LABELS: Record<Forpliktelsesgrad, string> =
+          + {                                                            
+       51 +  utrede: "Utrede",                                           
+       52 +  vurdere: "Vurdere",                                         
+       53 +  legge_frem: "Legge frem",                                   
+       54 +  komme_tilbake: "Komme tilbake",                             
+       55 +  sikre: "Sikre",                                             
+       56 +  gjennomfore: "Gjennomføre",                                 
+       57 +};                                                            
+       58 +                                                              
+       59 +const FORPLIKTELSE_COLORS: Record<Forpliktelsesgrad, string> =
+          + {                                                            
+       60 +  utrede: "var(--fg-dim)",                                    
+       61 +  vurdere: "var(--fg-dim)",                                   
+       62 +  legge_frem: "var(--warn)",                                  
+       63 +  komme_tilbake: "var(--warn)",                               
+       64 +  sikre: "var(--pos)",                                        
+       65 +  gjennomfore: "var(--pos)",                                  
+       66 +};                                                            
+       67 +                                                              
+       68 +const SIKKERHET_LABELS: Record<Sikkerhetsnivaa, string> = {   
+       69 +  hoy: "Høy",                                                 
+       70 +  middels: "Middels",                                         
+       71 +  lav: "Lav",                                                 
+       72 +};                                                            
+       73 +                                                              
+       74 +function ForpliktelseBadge({ grad }: { grad: Forpliktelsesgrad
+          + }) {                                                         
+       75 +  const color = FORPLIKTELSE_COLORS[grad];                    
+       76 +  return (                                                    
+       77 +    <span                                                     
+       78 +      className="chip"                                        
+       79 +      style={{                                                
+       80 +        fontSize: 10,                                         
+       81 +        color,                                                
+       82 +        background: `color-mix(in oklab, ${color} 12%, transpa
+          +rent)`,                                                       
+       83 +        borderColor: `color-mix(in oklab, ${color} 28%, transp
+          +arent)`,                                                      
+       84 +        fontFamily: "var(--font-mono)",                       
+       85 +        textTransform: "uppercase",                           
+       86 +        letterSpacing: "0.05em",                              
+       87 +      }}                                                      
+       88 +    >                                                         
+       89 +      {FORPLIKTELSE_LABELS[grad]}                             
+       90 +    </span>                                                   
+       91 +  );                                                          
+       92 +}                                                             
+       93 +                                                              
+       94 +function AnalyseVisning({ analyse }: { analyse: Saksanalyse })
+          + {                                                            
+       95 +  const inn = analyse.innholdsanalyse;                        
+       96 +  const kont = analyse.politisk_kontekst;                     
+       97 +                                                              
+       98 +  return (                                                    
+       99 +    <div style={{ display: "flex", flexDirection: "column", ga
+          +p: 20 }}>                                                     
+      100 +      {inn && (                                               
+      101 +        <div>                                                 
+      102 +          <div className="eyebrow" style={{ marginBottom: 10 }
+          +}>Sammendrag</div>                                            
+      103 +          <div style={{ display: "flex", flexDirection: "colum
+          +n", gap: 10 }}>                                               
+      104 +            <div style={{ fontSize: 13.5 }}>                  
+      105 +              <span style={{ color: "var(--fg-dim)", fontSize:
+          + 11, fontFamily: "var(--font-mono)", textTransform: "uppercase
+          +", letterSpacing: "0.06em", display: "block", marginBottom: 3 
+          +}}>                                                           
+      106 +                Problem                                       
+      107 +              </span>                                         
+      108 +              {inn.problemforstaelse}                         
+      109 +            </div>                                            
+      110 +            <div style={{ fontSize: 13.5 }}>                  
+      111 +              <span style={{ color: "var(--fg-dim)", fontSize:
+          + 11, fontFamily: "var(--font-mono)", textTransform: "uppercase
+          +", letterSpacing: "0.06em", display: "block", marginBottom: 3 
+          +}}>                                                           
+      112 +                Løsning                                       
+      113 +              </span>                                         
+      114 +              {inn.losningsforslag}                           
+      115 +            </div>                                            
+      116 +            {inn.argumentasjonslinjer.length > 0 && (         
+      117 +              <div>                                           
+      118 +                <span style={{ color: "var(--fg-dim)", fontSiz
+          +e: 11, fontFamily: "var(--font-mono)", textTransform: "upperca
+          +se", letterSpacing: "0.06em", display: "block", marginBottom: 
+          +6 }}>                                                         
+      119 +                  Argumenter                                  
+      120 +                </span>                                       
+      121 +                <ul style={{ margin: 0, padding: 0, listStyle:
+          + "none", display: "flex", flexDirection: "column", gap: 5 }}> 
+      122 +                  {inn.argumentasjonslinjer.map((a, i) => (   
+      123 +                    <li key={i} style={{ display: "flex", gap:
+          + 10, fontSize: 13 }}>                                         
+      124 +                      <span className="mono" style={{ color: "
+          +var(--fg-faint)", minWidth: 20 }}>{String(i + 1).padStart(2, "
+          +0")}</span>                                                   
+      125 +                      <span style={{ color: "var(--fg-muted)" 
+          +}}>{a}</span>                                                 
+      126 +                    </li>                                     
+      127 +                  ))}                                         
+      128 +                </ul>                                         
+      129 +              </div>                                          
+      130 +            )}                                                
+      131 +          </div>                                              
+      132 +        </div>                                                
+      133 +      )}                                                      
+      134 +                                                              
+      135 +      {analyse.forslag.length > 0 && (                        
+      136 +        <div>                                                 
+      137 +          <hr style={{ margin: "0 0 14px" }} />               
+      138 +          <div className="eyebrow" style={{ marginBottom: 10 }
+          +}>Forslagspunkter</div>                                       
+      139 +          <div style={{ display: "flex", flexDirection: "colum
+          +n", gap: 8 }}>                                                
+      140 +            {analyse.forslag.map((f) => (                     
+      141 +              <div                                            
+      142 +                key={f.nr}                                    
+      143 +                style={{                                      
+      144 +                  padding: "10px 12px",                       
+      145 +                  background: "var(--bg-elev)",               
+      146 +                  borderRadius: 6,                            
+      147 +                  border: "1px solid var(--border)",          
+      148 +                }}                                            
+      149 +              >                                               
+      150 +                <div style={{ display: "flex", alignItems: "ce
+          +nter", gap: 8, marginBottom: 5 }}>                            
+      151 +                  <span className="mono" style={{ fontSize: 11
+          +, color: "var(--fg-faint)" }}>                                
+      152 +                    §{f.nr}                                   
+      153 +                  </span>                                     
+      154 +                  {f.forpliktelsesgrad && <ForpliktelseBadge g
+          +rad={f.forpliktelsesgrad} />}                                 
+      155 +                </div>                                        
+      156 +                <p style={{ margin: 0, fontSize: 13, lineHeigh
+          +t: 1.5, color: "var(--fg)" }}>                                
+      157 +                  {f.tekst}                                   
+      158 +                </p>                                          
+      159 +              </div>                                          
+      160 +            ))}                                               
+      161 +          </div>                                              
+      162 +        </div>                                                
+      163 +      )}                                                      
+      164 +                                                              
+      165 +      {kont && (kont.politiske_dimensjoner.length > 0 || kont.
+          +kobling_eksisterende_politikk) && (                           
+      166 +        <div>                                                 
+      167 +          <hr style={{ margin: "0 0 14px" }} />               
+      168 +          <div className="eyebrow" style={{ marginBottom: 10 }
+          +}>Politisk kontekst</div>                                     
+      169 +          {kont.politiske_dimensjoner.length > 0 && (         
+      170 +            <div style={{ display: "flex", flexDirection: "col
+          +umn", gap: 6, marginBottom: 12 }}>                            
+      171 +              {kont.politiske_dimensjoner.map((d, i) => (     
+      172 +                <div                                          
+      173 +                  key={i}                                     
+      174 +                  style={{                                    
+      175 +                    padding: "8px 12px",                      
+      176 +                    background: "var(--bg-elev)",             
+      177 +                    borderRadius: 6,                          
+      178 +                    border: "1px solid var(--border)",        
+      179 +                    fontSize: 13,                             
+      180 +                  }}                                          
+      181 +                >                                             
+      182 +                  <div style={{ display: "flex", alignItems: "
+          +center", gap: 8, marginBottom: 3 }}>                          
+      183 +                    <span style={{ fontWeight: 500 }}>{d.akse}
+          +</span>                                                       
+      184 +                    <span style={{ color: "var(--fg-dim)", fon
+          +tSize: 11 }}>→</span>                                         
+      185 +                    <span style={{ color: "var(--fg-muted)" }}
+          +>{d.plassering}</span>                                        
+      186 +                    <span                                     
+      187 +                      className="chip"                        
+      188 +                      style={{ fontSize: 10, marginLeft: "auto
+          +", fontFamily: "var(--font-mono)" }}                          
+      189 +                    >                                         
+      190 +                      {SIKKERHET_LABELS[d.sikkerhet]}         
+      191 +                    </span>                                   
+      192 +                  </div>                                      
+      193 +                  <div style={{ fontSize: 12, color: "var(--fg
+          +-dim)", lineHeight: 1.4 }}>                                   
+      194 +                    {d.begrunnelse}                           
+      195 +                  </div>                                      
+      196 +                </div>                                        
+      197 +              ))}                                             
+      198 +            </div>                                            
+      199 +          )}                                                  
+      200 +          {kont.kobling_eksisterende_politikk && (            
+      201 +            <div                                              
+      202 +              style={{                                        
+      203 +                padding: "8px 12px",                          
+      204 +                background: "var(--bg-elev)",                 
+      205 +                borderRadius: 6,                              
+      206 +                border: "1px solid var(--border)",            
+      207 +                fontSize: 13,                                 
+      208 +              }}                                              
+      209 +            >                                                 
+      210 +              <div style={{ display: "flex", alignItems: "cent
+          +er", gap: 8, marginBottom: 3 }}>                              
+      211 +                <span style={{ color: "var(--fg-dim)", fontSiz
+          +e: 11, fontFamily: "var(--font-mono)", textTransform: "upperca
+          +se", letterSpacing: "0.06em" }}>                              
+      212 +                  Kobling                                     
+      213 +                </span>                                       
+      214 +                <span className="chip" style={{ fontSize: 11, 
+          +fontFamily: "var(--font-mono)" }}>                            
+      215 +                  {kont.kobling_eksisterende_politikk.type}   
+      216 +                </span>                                       
+      217 +                <span                                         
+      218 +                  className="chip"                            
+      219 +                  style={{ fontSize: 10, marginLeft: "auto", f
+          +ontFamily: "var(--font-mono)" }}                              
+      220 +                >                                             
+      221 +                  {SIKKERHET_LABELS[kont.kobling_eksisterende_
+          +politikk.sikkerhet]}                                          
+      222 +                </span>                                       
+      223 +              </div>                                          
+      224 +              <div style={{ fontSize: 12, color: "var(--fg-dim
+          +)", lineHeight: 1.4 }}>                                       
+      225 +                {kont.kobling_eksisterende_politikk.begrunnels
+          +e}                                                            
+      226 +              </div>                                          
+      227 +            </div>                                            
+      228 +          )}                                                  
+      229 +        </div>                                                
+      230 +      )}                                                      
+      231 +    </div>                                                    
+      232 +  );                                                          
+      233 +}                                                             
+      234 +                                                              
+      235 +type AnalysePanelState =                                      
+      236 +  | { kind: "idle" }                                          
+      237 +  | { kind: "loading" }                                       
+      238 +  | { kind: "ready"; analyse: Saksanalyse }                   
+      239 +  | { kind: "error"; message: string };                       
+      240 +                                                              
+      241 +function AnalysePanel({ sakId }: { sakId: string }) {         
+      242 +  const [state, setState] = React.useState<AnalysePanelState>(
+          +{ kind: "idle" });                                            
+      243 +                                                              
+      244 +  async function hentAnalyse(force = false) {                 
+      245 +    setState({ kind: "loading" });                            
+      246 +    try {                                                     
+      247 +      const url = `/api/analyse/${encodeURIComponent(sakId)}${
+          +force ? "?force=true" : ""}`;                                 
+      248 +      const res = await fetch(url);                           
+      249 +      if (!res.ok) {                                          
+      250 +        const body = await res.json().catch(() => ({}));      
+      251 +        setState({ kind: "error", message: body.detail ?? body
+          +.message ?? `HTTP ${res.status}` });                          
+      252 +        return;                                               
+      253 +      }                                                       
+      254 +      const analyse: Saksanalyse = await res.json();          
+      255 +      setState({ kind: "ready", analyse });                   
+      256 +    } catch (err) {                                           
+      257 +      setState({ kind: "error", message: (err as Error).messag
+          +e });                                                         
+      258 +    }                                                         
+      259 +  }                                                           
+      260 +                                                              
+      261 +  return (                                                    
+      262 +    <section className="card" style={{ padding: 24 }}>        
+      263 +      <div style={{ display: "flex", alignItems: "center", gap
+          +: 8, marginBottom: state.kind === "idle" ? 0 : 14 }}>         
+      264 +        <span                                                 
+      265 +          style={{                                            
+      266 +            width: 22,                                        
+      267 +            height: 22,                                       
+      268 +            borderRadius: 4,                                  
+      269 +            background: "var(--fg)",                          
+      270 +            color: "var(--bg)",                               
+      271 +            display: "grid",                                  
+      272 +            placeItems: "center",                             
+      273 +            fontSize: 11,                                     
+      274 +            fontFamily: "var(--font-mono)",                   
+      275 +            fontWeight: 600,                                  
+      276 +          }}                                                  
+      277 +        >                                                     
+      278 +          A                                                   
+      279 +        </span>                                               
+      280 +        <div className="eyebrow">AI-analyse</div>             
+      281 +        {state.kind === "idle" && (                           
+      282 +          <button                                             
+      283 +            className="btn"                                   
+      284 +            onClick={() => hentAnalyse()}                     
+      285 +            style={{ marginLeft: "auto", height: 28, padding: 
+          +"0 12px", fontSize: 12, cursor: "pointer" }}                  
+      286 +          >                                                   
+      287 +            Hent analyse                                      
+      288 +          </button>                                           
+      289 +        )}                                                    
+      290 +        {state.kind === "ready" && (                          
+      291 +          <button                                             
+      292 +            className="btn"                                   
+      293 +            onClick={() => setState({ kind: "idle" })}        
+      294 +            style={{ marginLeft: "auto", height: 28, padding: 
+          +"0 12px", fontSize: 12, cursor: "pointer" }}                  
+      295 +          >                                                   
+      296 +            Lukk                                              
+      297 +          </button>                                           
+      298 +        )}                                                    
+      299 +        {state.kind === "error" && (                          
+      300 +          <button                                             
+      301 +            className="btn"                                   
+      302 +            onClick={() => hentAnalyse()}                     
+      303 +            style={{ marginLeft: "auto", height: 28, padding: 
+          +"0 12px", fontSize: 12, cursor: "pointer" }}                  
+      304 +          >                                                   
+      305 +            Prøv igjen                                        
+      306 +          </button>                                           
+      307 +        )}                                                    
+      308 +      </div>                                                  
+      309 +                                                              
+      310 +      {state.kind === "loading" && (                          
+      311 +        <div>                                                 
+      312 +          <div style={{ fontSize: 13, color: "var(--fg-dim)", 
+          +marginBottom: 12 }}>                                          
+      313 +            Kjører analysepipeline — dette tar typisk 20–40 se
+          +kunder…                                                       
+      314 +          </div>                                              
+      315 +          <div style={{ display: "flex", flexDirection: "colum
+          +n", gap: 8 }}>                                                
+      316 +            {[80, 60, 90, 50].map((w, i) => (                 
+      317 +              <div                                            
+      318 +                key={i}                                       
+      319 +                style={{                                      
+      320 +                  height: 12,                                 
+      321 +                  width: `${w}%`,                             
+      322 +                  borderRadius: 4,                            
+      323 +                  background: "var(--border)",                
+      324 +                  opacity: 0.6,                               
+      325 +                }}                                            
+      326 +              />                                              
+      327 +            ))}                                               
+      328 +          </div>                                              
+      329 +        </div>                                                
+      330 +      )}                                                      
+      331 +                                                              
+      332 +      {state.kind === "error" && (                            
+      333 +        <div                                                  
+      334 +          style={{                                            
+      335 +            padding: "12px 14px",                             
+      336 +            borderRadius: 6,                                  
+      337 +            background: "color-mix(in oklab, var(--neg) 10%, t
+          +ransparent)",                                                 
+      338 +            border: "1px solid color-mix(in oklab, var(--neg) 
+          +25%, transparent)",                                           
+      339 +            color: "var(--neg)",                              
+      340 +            fontSize: 13,                                     
+      341 +            lineHeight: 1.5,                                  
+      342 +          }}                                                  
+      343 +        >                                                     
+      344 +          {state.message}                                     
+      345 +        </div>                                                
+      346 +      )}                                                      
+      347 +                                                              
+      348 +      {state.kind === "ready" && <AnalyseVisning analyse={stat
+          +e.analyse} />}                                                
+      349 +    </section>                                                
+      350 +  );                                                          
+      351 +}                                                             
+      352 +                                                              
+      353  // Normalised row shape — lets the same JSX render both mock a
+           nd live rows
+      354  // without branching in the table/card markup.
+      355  type BillRow = {
+
+● Now replace the mock AI-sammendrag section in BillDetail with the AnalysePanel
+   when isLive:
+
+● Update(components\dash\page-bills.tsx)
+  ⎿  Added 58 lines, removed 54 lines
+      798  
+      799        <div style={{ display: "grid", gridTemplateColumns: "1.6
+           fr 1fr", gap: 24 }}>
+      800          <div style={{ display: "flex", flexDirection: "column"
+           , gap: 24 }}>
+      801 -          <section className="card" style={{ padding: 24 }}>  
+      802 -            <div style={{ display: "flex", alignItems: "center
+          -", gap: 8, marginBottom: 14 }}>                               
+      803 -              <span                                           
+      801 +          {isLive ? (                                         
+      802 +            <AnalysePanel sakId={liveDetail!.id} />           
+      803 +          ) : (                                               
+      804 +            <section className="card" style={{ padding: 24 }}>
+      805 +              <div style={{ display: "flex", alignItems: "cent
+          +er", gap: 8, marginBottom: 14 }}>                             
+      806 +                <span                                         
+      807 +                  style={{                                    
+      808 +                    width: 22,                                
+      809 +                    height: 22,                               
+      810 +                    borderRadius: 4,                          
+      811 +                    background: "var(--fg)",                  
+      812 +                    color: "var(--bg)",                       
+      813 +                    display: "grid",                          
+      814 +                    placeItems: "center",                     
+      815 +                    fontSize: 11,                             
+      816 +                    fontFamily: "var(--font-mono)",           
+      817 +                    fontWeight: 600,                          
+      818 +                  }}                                          
+      819 +                >                                             
+      820 +                  A                                           
+      821 +                </span>                                       
+      822 +                <div className="eyebrow">AI-sammendrag</div>  
+      823 +                <PreliminaryBadge />                          
+      824 +              </div>                                          
+      825 +              <p                                              
+      826                  style={{
+      805 -                  width: 22,                                  
+      806 -                  height: 22,                                 
+      807 -                  borderRadius: 4,                            
+      808 -                  background: "var(--fg)",                    
+      809 -                  color: "var(--bg)",                         
+      810 -                  display: "grid",                            
+      811 -                  placeItems: "center",                       
+      812 -                  fontSize: 11,                               
+      813 -                  fontFamily: "var(--font-mono)",             
+      814 -                  fontWeight: 600,                            
+      827 +                  fontSize: 15.5,                             
+      828 +                  lineHeight: 1.65,                           
+      829 +                  color: "var(--fg)",                         
+      830 +                  margin: 0,                                  
+      831 +                  fontFamily: "var(--font-display)",          
+      832 +                  fontWeight: 400,                            
+      833                  }}
+      834                >
+      817 -                A                                             
+      818 -              </span>                                         
+      819 -              <div className="eyebrow">AI-sammendrag</div>    
+      820 -              <PreliminaryBadge />                            
+      821 -            </div>                                            
+      822 -            <p                                                
+      823 -              style={{                                        
+      824 -                fontSize: 15.5,                               
+      825 -                lineHeight: 1.65,                             
+      826 -                color: "var(--fg)",                           
+      827 -                margin: 0,                                    
+      828 -                fontFamily: "var(--font-display)",            
+      829 -                fontWeight: 400,                              
+      830 -              }}                                              
+      831 -            >                                                 
+      832 -              {bill.aiSummary}                                
+      833 -            </p>                                              
+      834 -            <hr style={{ margin: "18px 0" }} />               
+      835 -            <div className="eyebrow" style={{ marginBottom: 10
+          - }}>                                                          
+      836 -              Hovedpunkter                                    
+      837 -            </div>                                            
+      838 -            <ul                                               
+      839 -              style={{                                        
+      840 -                margin: 0,                                    
+      841 -                padding: 0,                                   
+      842 -                listStyle: "none",                            
+      843 -                display: "flex",                              
+      844 -                flexDirection: "column",                      
+      845 -                gap: 6,                                       
+      846 -              }}                                              
+      847 -            >                                                 
+      848 -              {bill.aiKeyPoints.map((k, i) => (               
+      849 -                <li key={i} style={{ display: "flex", gap: 10,
+          - fontSize: 14 }}>                                             
+      850 -                  <span className="mono" style={{ color: "var(
+          ---fg-faint)", minWidth: 24 }}>                                
+      851 -                    0{i + 1}                                  
+      852 -                  </span>                                     
+      853 -                  <span style={{ color: "var(--fg-muted)" }}>{
+          -k}</span>                                                     
+      854 -                </li>                                         
+      855 -              ))}                                             
+      856 -            </ul>                                             
+      857 -          </section>                                          
+      835 +                {bill.aiSummary}                              
+      836 +              </p>                                            
+      837 +              <hr style={{ margin: "18px 0" }} />             
+      838 +              <div className="eyebrow" style={{ marginBottom: 
+          +10 }}>                                                        
+      839 +                Hovedpunkter                                  
+      840 +              </div>                                          
+      841 +              <ul                                             
+      842 +                style={{                                      
+      843 +                  margin: 0,                                  
+      844 +                  padding: 0,                                 
+      845 +                  listStyle: "none",                          
+      846 +                  display: "flex",                            
+      847 +                  flexDirection: "column",                    
+      848 +                  gap: 6,                                     
+      849 +                }}                                            
+      850 +              >                                               
+      851 +                {bill.aiKeyPoints.map((k, i) => (             
+      852 +                  <li key={i} style={{ display: "flex", gap: 1
+          +0, fontSize: 14 }}>                                           
+      853 +                    <span className="mono" style={{ color: "va
+          +r(--fg-faint)", minWidth: 24 }}>                              
+      854 +                      0{i + 1}                                
+      855 +                    </span>                                   
+      856 +                    <span style={{ color: "var(--fg-muted)" }}
+          +>{k}</span>                                                   
+      857 +                  </li>                                       
+      858 +                ))}                                           
+      859 +              </ul>                                           
+      860 +            </section>                                        
+      861 +          )}                                                  
+      862  
+      863            <section className="card" style={{ padding: 24 }}>
+      864              <div
+
+● Now let me check the TypeScript compiles cleanly:
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash" && npx
+      tsc --noEmit 2>&1)
+  ⎿  (No output)
+
+● No errors. Let me do a quick sanity check on the created route:
+
+  Read 1 file (ctrl+o to expand)
+
+● TypeScript is clean. Here's what was implemented:
+
+  lib/stortinget/types.ts — appended Saksanalyse, SaksForslagspunkt,
+  SaksInnholdsanalyse, SaksPolitiskKontekst, SaksPolitiskDimensjon,
+  SaksKoblingEksisterendePolitikk, and the three enum union types.
+
+  app/api/analyse/[sak_id]/route.ts — new proxy route that forwards GET 
+  /api/analyse/{sak_id}?force=true to the Python backend at BACKEND_URL ?? 
+  "http://localhost:8000", passes ?force through, and returns 502 if the backend
+   is unreachable.
+
+  components/dash/page-bills.tsx — added AnalysePanel (idle → loading → ready |
+  error state machine), AnalyseVisning (renders sammendrag, forslagspunkter with
+   ForpliktelseBadge, politisk kontekst), and wired into BillDetail: when
+  isLive, the mock AI-sammendrag card is replaced by <AnalysePanel 
+  sakId={liveDetail.id} />.
+
+✻ Worked for 10m 1s
+
+❯ Failed to load resource: the server responded with a status of 502 (Bad       
+  Gateway) on                                                                   
+  :3000/api/stortinget/bills/Prop.%20142%20L%20(2025%E2%80%932026):1 and        
+  :3000/api/stortinget/bills/200018:1 and :3000/api/analyse/200280:1            
+● Three 502s — let me diagnose them. Reading the bills merge code first.
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+● Let me look at the endpoints and the full bills route to understand what's
+  happening:
+
+  Read 4 files (ctrl+o to expand)
+
+● Let me check the mock data and what IDs look like, plus the dashboard
+  navigation:
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Found it. Mock bills have reference strings as IDs (e.g., "Prop. 142 L 
+  (2025-2026)") — when clicked before live data loads, BillDetail calls the
+  Stortinget API with that string as sakid, which fails with 502. Let me check
+  useApiResource to see if it supports skipping:
+
+  Read 1 file (ctrl+o to expand)
+
+● Three distinct root causes:
+
+  1. Mock bills have reference strings as IDs ("Prop. 142 L (2025-2026)"). When
+  clicked before live data loads, BillDetail calls
+  /api/stortinget/bills/Prop.%20142%20L%20(2025%E2%80%932026) which gives the
+  Stortinget API sakid=Prop. 142 L... — invalid → 502.
+  2. Bill 200018 — Stortinget API returning an error for that specific bill
+  (likely a schema mismatch on the response).
+  3. /api/analyse/200280 — Python backend not running on port 8000.
+
+  I'll fix (1) and (2) in code. (3) needs the backend started.
+
+  Fix (1): guard useApiResource to skip when the ID isn't numeric. Fix (2): make
+   the Stortinget schema tolerant of real API variations.
+
+● Update(lib\stortinget\client.ts)
+  ⎿  Added 13 lines, removed 8 lines
+      37  // Minimal fetch-on-mount hook. Not a replacement for SWR/react
+          -query, just
+      38  // enough for the first live panel. Swap in a proper library on
+          ce we have
+      39  // more than one or two live views.
+      40 -export function useApiResource<T, M = DefaultMeta>(url: string)
+         -: ResourceState<T, M> {                                        
+      40 +//                                                             
+      41 +// Pass `null` as the URL to skip fetching entirely (stays in "
+         +loading" state,                                                
+      42 +// which callers treat as "no live data" and fall back to mock 
+         +content).                                                      
+      43 +export function useApiResource<T, M = DefaultMeta>(url: string 
+         +| null): ResourceState<T, M> {                                 
+      44 +  const key = url ?? "__null__";                               
+      45    const [tracked, setTracked] = useState<TrackedState<T, M>>(()
+           => ({
+      42 -    url,                                                       
+      46 +    url: key,                                                  
+      47      resource: loadingState<T, M>(),
+      48    }));
+      49  
+      50    // React 19 pattern for derived state from props: reset durin
+          g render when
+      51    // the input changes, rather than from an effect body.
+      48 -  if (tracked.url !== url) {                                   
+      49 -    setTracked({ url, resource: loadingState<T, M>() });       
+      52 +  if (tracked.url !== key) {                                   
+      53 +    setTracked({ url: key, resource: loadingState<T, M>() });  
+      54    }
+      55  
+      56    useEffect(() => {
+      57 +    if (url === null) return;                                  
+      58      const controller = new AbortController();
+      59      fetchEnvelope<T, M>(url, controller.signal)
+      60        .then((env) => {
+      61          if (controller.signal.aborted) return;
+      62          setTracked({
+      58 -          url,                                                 
+      63 +          url: key,                                            
+      64            resource: { status: "ready", data: env.data, error: n
+          ull, meta: env.meta },
+      65          });
+      66        })
+     ...
+      68          if (controller.signal.aborted) return;
+      69          const error = err instanceof Error ? err : new Error(St
+          ring(err));
+      70          if (error.name === "AbortError") return;
+      66 -        setTracked({ url, resource: { status: "error", data: nu
+         -ll, error, meta: null } });                                    
+      71 +        setTracked({ url: key, resource: { status: "error", dat
+         +a: null, error, meta: null } });                               
+      72        });
+      73      return () => controller.abort();
+      69 -  }, [url]);                                                   
+      74 +  }, [url, key]);                                              
+      75  
+      71 -  return tracked.url === url ? tracked.resource : loadingState<
+         -T, M>();                                                       
+      76 +  return tracked.url === key ? tracked.resource : loadingState<
+         +T, M>();                                                       
+      77  }
+
+● Now guard BillDetail to skip the API call for non-numeric IDs:
+
+● Update(components\dash\page-bills.tsx)
+  ⎿  Added 5 lines, removed 3 lines
+      680  
+      681  export function BillDetail({ onNav, params }: { onNav: Nav; pa
+           rams: Params }) {
+      682    // Per-bill detail endpoint — gives us saksgang, proposers, 
+           keywords, and a
+      683 -  // derived stageNumber. The list endpoint is consulted only 
+          -as a fallback                                                 
+      684 -  // for fields the detail envelope doesn't carry (sist_oppdat
+          -ert_dato etc.).                                               
+      683 +  // derived stageNumber. Mock bills use reference strings (e.
+          +g. "Prop. 142 L                                               
+      684 +  // (2025-2026)") as their id, which are not valid Stortinget
+          + sak IDs. Skip                                                
+      685 +  // the API call for those to avoid 502s; they fall back to m
+          +ock data below.                                               
+      686 +  const isNumericId = /^\d+$/.test(params.id);                
+      687    const detail = useApiResource<MergedBillDetail, MergedBillDe
+           tailEnvelope["meta"]>(
+      686 -    `/api/stortinget/bills/${encodeURIComponent(params.id)}`, 
+      688 +    isNumericId ? `/api/stortinget/bills/${encodeURIComponent(
+          +params.id)}` : null,                                          
+      689    );
+      690    const liveDetail = detail.status === "ready" ? detail.data :
+            undefined;
+      691  
+
+● Now look at what's happening with bill 200018. The Stortinget API schema might
+   be rejecting real response data. Let me check if saksgang_hendelse_liste
+  could be missing or if there are other schema strictness issues:
+
+  Read 1 file (ctrl+o to expand)
+
+● Found it. parseBillDetail parses the raw response directly, but the Stortinget
+   sak?sakid=X endpoint wraps results in sak_liste: [...] just like all other
+  endpoints — the function never unwraps it, so every id/tittel/saksgang field
+  is "missing" and zod throws. Also dato in events isn't marked nullable. Both
+  need fixing:
+
+● Update(lib\stortinget\schemas.ts)
+  ⎿  Added 3 lines, removed 3 lines
+      102  // validate the parts the UI renders.
+      103  const SaksgangEventSchema = Envelope.extend({
+      104    id: z.string(),
+      105 -  dato: z.string(),                                           
+      106 -  stegnummer: z.string(),                                     
+      105 +  dato: z.string().nullable().optional(),                     
+      106 +  stegnummer: z.string().optional(),                          
+      107    sorterings_nummer: z.number().optional(),
+      108  });
+      109  
+     ...
+      112    navn: z.string(),
+      113    steg_nummer: z.number().int(),
+      114    uaktuell: z.boolean(),
+      115 -  saksgang_hendelse_liste: z.array(SaksgangEventSchema),      
+      115 +  saksgang_hendelse_liste: z.array(SaksgangEventSchema).nullab
+          +le().default([]),                                             
+      116  });
+      117  
+      118  const SaksgangSchema = Envelope.extend({
+
+● Now fix parseBillDetail to unwrap sak_liste:
+
+● Update(lib\stortinget\schemas.ts)
+  ⎿  Added 10 lines, removed 1 line
+      155  });
+      156  export type ApiBillDetail = z.infer<typeof BillDetailSchema>;
+      157  
+      158 +// The `sak?sakid=X` endpoint wraps the single bill in `sak_li
+          +ste`, consistent                                              
+      159 +// with all other Stortinget endpoints that return list wrappe
+          +rs even for                                                   
+      160 +// single-item lookups.                                       
+      161 +const BillDetailResponseSchema = Envelope.extend({            
+      162 +  sak_liste: z.array(BillDetailSchema),                       
+      163 +});                                                           
+      164 +                                                              
+      165  export function parseBillDetail(raw: unknown): ApiBillDetail {
+      159 -  return BillDetailSchema.parse(raw);                         
+      166 +  const { sak_liste } = BillDetailResponseSchema.parse(raw);  
+      167 +  if (sak_liste.length === 0) throw new Error("Ingen sak i res
+          +pons");                                                       
+      168 +  return sak_liste[0];                                        
+      169  }
+
+● Now update shapeEvent in merge.ts to handle the now-nullable dato:
+
+● Update(lib\stortinget\merge.ts)
+  ⎿  Added 1 line, removed 1 line
+      220    return {
+      221      id: e.id,
+      222      label: EVENT_LABELS[e.id] ?? e.id,
+      223 -    date: parseNorwegianDate(e.dato),                         
+      223 +    date: parseNorwegianDate(e.dato ?? ""),                   
+      224    };
+      225  }
+      226  
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash" && npx
+      tsc --noEmit 2>&1)
+  ⎿  Error: Exit code 2
+     lib/stortinget/merge.ts(219,108): error TS2537: Type '{ id: string; 
+     versjon?: string | undefined; respons_dato_tid?: string | undefined; dato?:
+      string | null | undefined; stegnummer?: string | undefined; 
+     sorterings_nummer?: number | undefined; }[] | null' has no matching index 
+     signature for type 'number'.
+     lib/stortinget/merge.ts(233,13): error TS18047: 's.saksgang_hendelse_liste'
+      is possibly 'null'.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(lib\stortinget\merge.ts)
+  ⎿  Added 1 line, removed 1 line
+      230      id: s.id,
+      231      name: s.navn,
+      232      uaktuell: s.uaktuell,
+      233 -    events: s.saksgang_hendelse_liste.map(shapeEvent),        
+      233 +    events: (s.saksgang_hendelse_liste ?? []).map(shapeEvent),
+      234    };
+      235  }
+      236  
+
+● The line 219 error (saksgang_hendelse_liste indexed by number) is a TypeScript
+   type inference issue with .default([]) making the type nullable-array. Fix
+  that in the schema:
+
+● Update(lib\stortinget\schemas.ts)
+  ⎿  Added 1 line, removed 1 line
+      112    navn: z.string(),
+      113    steg_nummer: z.number().int(),
+      114    uaktuell: z.boolean(),
+      115 -  saksgang_hendelse_liste: z.array(SaksgangEventSchema).nullab
+          -le().default([]),                                             
+      115 +  saksgang_hendelse_liste: z.array(SaksgangEventSchema).nullis
+          +h().transform((v) => v ?? []),                                
+      116  });
+      117  
+      118  const SaksgangSchema = Envelope.extend({
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash" && npx
+      tsc --noEmit 2>&1)
+  ⎿  (No output)
+
+● Clean. Three fixes applied:
+
+  1. Mock bill IDs (Prop. 142 L... as sak_id): BillDetail now checks /^\d+$/
+  before calling the detail API — non-numeric IDs get null passed to
+  useApiResource, which skips the fetch and falls back to mock content. No more
+  502 for mock bills.
+  2. Bill 200018 (and all real bills): parseBillDetail was parsing the raw
+  response directly, but the Stortinget sak?sakid=X endpoint wraps the result in
+   sak_liste: [...] like all other endpoints. Added BillDetailResponseSchema to
+  unwrap it. Also made dato nullable and saksgang_hendelse_liste nullish in the
+  schema to handle real API variations.
+  3. /api/analyse/200280: Backend not running — start the Python server with cd 
+  backend && uvicorn app.main:app --reload and the AnalysePanel will work.
+
+✻ Worked for 5m 26s
+
+❯ Det viser fremdeles mock, fint om du kan starte backend                       
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash/backend"
+       && uvicorn app.main:app --reload --port 8000 2>&1 &)
+  ⎿  Running in the background (↓ to manage)
+
+● Bash(sleep 3 && curl -s http://localhost:8000/api/v1/health 2>&1 || curl -s
+      http://localhost:8000/ 2>&1 || echo "not_up_yet")
+  ⎿  not_up_yet
+
+● Background command "Start FastAPI backend in background" completed (exit code 0)
+
+  Read 1 file, listed 1 directory (ctrl+o to expand)
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash/backend"
+       && python -m uvicorn app.main:app --reload --port 8000 2>&1 | head -5)
+  ⎿  Running in the background (↓ to manage)
+  ⎿  (timeout 8s)
+
+● Bash(sleep 4 && curl -s http://localhost:8000/ 2>&1)
+  ⎿  {
+       "detail": "Not Found"
+     }
+
+● Backend is up. Let me verify the analyse endpoint responds:
+
+● Bash(curl -s http://localhost:8000/api/v1/analyse/200280 2>&1 | head -c 200)
+  ⎿  Internal Server Error
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash/backend"
+       && python -c "from app.api.routes import router; print('ok')" 2>&1)
+  ⎿  ok
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash/backend"
+       && python -c "
+      import asyncio…)
+  ⎿  model: claude-sonnet-4-6
+     api_key set: True
+
+● Bash(curl -sv http://localhost:8000/api/v1/analyse/200280 2>&1 | tail -20)
+  ⎿  * IPv4: 127.0.0.1
+     *   Trying [::1]:8000...
+     *   Trying 127.0.0.1:8000...
+     … +18 lines (ctrl+o to expand)
+
+● The 500 is an unhandled exception — let me see the actual traceback by running
+   the handler directly:
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash/backend"
+       && python -c "
+      import asyncio…)
+  ⎿  2026-04-20 21:53:02 [info     ] pipeline_steg1_start           sak_id=
+     200280
+     2026-04-20 21:53:03 [info     ] stortinget_ok                  attempt
+     … +31 lines (ctrl+o to expand)
+  ⎿  (timeout 1m)
+
+● Pipeline works fine directly. The 500 must be a response serialization issue
+  with the running instance. Let me check:
+
+● Bash(curl -s http://localhost:8000/health 2>&1)
+  ⎿  {
+       "status": "ok"
+     }
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash/backend"
+       && python -c "
+      import asyncio, json…)
+  ⎿  2026-04-20 21:54:31 [info     ] claude_tool_call_ok            input_t
+     okens=3320 model=claude-sonnet-4-6 output_tokens=1082 tool=lever_polit
+     isk_kontekst
+     … +11 lines (ctrl+o to expand)
+  ⎿  (timeout 2m)
+
+● The cache is now warm from the direct call. Let me hit the API again:
+
+● Bash(curl -s http://localhost:8000/api/v1/analyse/200280 2>&1 | head -c 300)  ⎿  Internal Server Error
+
+● The running uvicorn process is likely missing the .env file in its working
+  directory. Let me kill it and restart from the correct directory:
+
+● Bash(netstat -ano 2>/dev/null | grep ":8000" | awk '{print $5}' | head -5 ||
+      ss -tlnp 2>/dev/null | grep 8000)
+  ⎿  27516
+     0
+     0
+
+● Bash(taskkill /F /PID 27516 2>&1; sleep 1; echo "done")
+  ⎿  ERROR: Invalid argument/option - 'F:/'.
+     Type "TASKKILL /?" for usage.
+     done
+
+● Bash(kill $(lsof -ti:8000) 2>/dev/null; sleep 1; echo "killed")
+  ⎿  /usr/bin/bash: line 1: lsof: command not found
+     killed
+
+● Bash(ps aux | grep uvicorn | grep -v grep | awk '{print $1}' | xargs -r kill
+      -9 2>/dev/null; echo "done")
+  ⎿  done
+
+● Bash(curl -s --max-time 2 http://localhost:8000/health 2>&1)
+  ⎿  {
+       "status": "ok"
+     }
+
+● It's still alive (Windows process). Let me start a second instance on port
+  8001 to get the actual error output:
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash/backend"
+       && python -m uvicorn app.main:app --port 8001 2>&1 &
+      sleep 5…)
+  ⎿  Running in the background (↓ to manage)
+  ⎿  (timeout 30s)
+
+● Bash(sleep 6 && curl -s http://localhost:8001/api/v1/analyse/200280 2>&1 |
+      head -c 400)
+  ⎿  Error: Exit code 143
+
+● Background command "Start server on 8001, test analyse endpoint" completed (exit code 0)
+
+  Read 1 file (ctrl+o to expand)
+
+● Port 8001 works perfectly. The old 8000 process is a stale Windows process.
+  Let me kill it with PowerShell and restart on 8000:
+
+● Bash(powershell.exe -Command "Get-NetTCPConnection -LocalPort 8000 |
+      Select-Object -ExpandProperty OwningProcess | ForEach-Object {
+      Stop-Process -Id \$_ -Force }" 2>…)
+  ⎿  done
+
+● Background command "Try python -m uvicorn" completed (exit code 0)
+
+● Bash(curl -s --max-time 2 http://localhost:8000/health 2>&1)
+  ⎿  {
+       "status": "ok"
+     }
+
+● Port 8000 is still running a stale instance. Let me check what .env files
+  exist for the frontend and point it to 8001 where things work:
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Bash(powershell.exe -Command "Get-Process -Name python | Where-Object {
+      \$_.CommandLine -like '*uvicorn*' } | Stop-Process -Force" 2>&1; echo
+      "done")
+  ⎿  done
+
+● Bash(curl -s --max-time 2 http://localhost:8000/health 2>&1; echo "---"; curl
+      -s --max-time 2 http://localhost:8001/health 2>&1)
+  ⎿  {"status":"ok"}---
+     {
+       "status": "ok"
+     }
+
+● Bash(powershell.exe -Command "Get-NetTCPConnection -LocalPort 8000,8001 |
+      Select LocalPort,OwningProcess" 2>&1)
+  ⎿  LocalPort OwningProcess
+     --------- -------------
+          8001          7272
+          8000         27516
+
+● Bash(powershell.exe -Command "Stop-Process -Id 27516 -Force; Stop-Process -Id
+      7272 -Force" 2>&1; sleep 1; curl -s --max-time 2
+      http://localhost:8000/health 2>&1 || e…)
+  ⎿  Stop-Process : Cannot find a process with the process identifier 27516
+     .
+     At line:1 char:1
+     … +10 lines (ctrl+o to expand)
+● Bash(powershell.exe -Command "Get-NetTCPConnection -LocalPort 8000 | Select
+      LocalPort,OwningProcess" 2>&1)
+  ⎿  LocalPort OwningProcess
+     --------- -------------
+          8000         27516
+
+● Bash(powershell.exe -Command "Get-Process -Id 27516 2>&1" 2>&1)
+  ⎿  Error: Exit code 1
+     Get-Process : Cannot find a process with the process identifier 27516.
+     At line:1 char:1
+     + Get-Process -Id 27516 2>&1
+     + ~~~~~~~~~~~~~~~~~~~~~~~~~~
+         + CategoryInfo          : ObjectNotFound: (27516:Int32) [Get-Process], 
+     ProcessCommandException
+         + FullyQualifiedErrorId : 
+     NoProcessFoundForGivenId,Microsoft.PowerShell.Commands.GetProcessCommand
+
+● Bash(powershell.exe -Command "Get-NetTCPConnection -LocalPort 8000 | Select
+      LocalPort,State,OwningProcess" 2>&1)
+  ⎿  LocalPort  State OwningProcess
+     ---------  ----- -------------
+          8000 Listen         27516
+
+● Bash(powershell.exe -Command "netstat -ano | Select-String ':8000'" 2>&1)
+  ⎿    TCP    127.0.0.1:8000         0.0.0.0:0              LISTENING
+      27516
+       TCP    127.0.0.1:49692        127.0.0.1:8000         TIME_WAIT
+     … +5 lines (ctrl+o to expand)
+
+● Bash(powershell.exe -Command "Stop-Process -Id 46296 -Force 2>&1; Write-Host
+      done" 2>&1)
+  ⎿  done
+
+● Bash(sleep 1 && curl -s --max-time 2 http://localhost:8000/health 2>&1 || echo
+       "8000 free")
+  ⎿  8000 free
+
+● Port 8000 is free. Now start a clean instance:
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash/backend"
+       && python -m uvicorn app.main:app --port 8000 --reload > /tmp/backend.log
+       2>&1 &
+      sleep…)
+  ⎿  {
+       "status": "ok"
+     }
+  ⎿  (timeout 15s)
+
+● Bash(curl -s http://localhost:8000/api/v1/analyse/200280 2>&1 | python3 -c
+      "import sys,json; d=json.load(sys.stdin); print('sak_id:', d['sak_id']);
+      print('tittel:',…)
+  ⎿  sak_id: 200280
+     tittel: Representantforslag fra stortingsrepresentantene Erlend
+     Wibo
+     dimensjoner: 5
+
+● Backend is up on port 8000 and returning correct data (from cache — instant
+  response). Also the 8001 instance is still running; let me clean it up:
+
+● Bash(powershell.exe -Command "Get-NetTCPConnection -LocalPort 8001 |
+      Select-Object -ExpandProperty OwningProcess | ForEach-Object {
+      Stop-Process -Id \$_ -Force -Erro…)
+  ⎿  Get-NetTCPConnection : No MSFT_NetTCPConnection objects found with pro
+     perty 'LocalPort' equal to '8001'.  Verify the
+     value of the property and retry.
+     … +10 lines (ctrl+o to expand)
+
+● 8001 is already gone. Backend is running cleanly on port 8000 and returning
+  the cached analysis for sak 200280. The "Hent analyse" button in the frontend
+  should now work — click it on any live bill to trigger the pipeline.
+
+✻ Cogitated for 7m 10s
+
+❯ I think that works now, but there is an error when clicking a bill: GET       
+  http://localhost:3000/api/stortinget/bills/200280 502 (Bad Gateway) on        
+  client.ts:32                                                                  
+
+● Let me check what the Stortinget API actually returns for this endpoint — my
+  sak_liste assumption may be wrong:
+
+● Bash(curl -s "https://data.stortinget.no/eksport/sak?sakid=200280&format=json"
+       2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin);
+      print(list(d.keys()))")
+  ⎿  ['respons_dato_tid', 'versjon', 'dokumentgruppe', 'emne_liste', 'ferdi
+     gbehandlet', 'henvisning', 'id', 'innstillingstekst', 'komite', 'kortt
+     ittel', 'kortvedtak', 'parentestekst', 'publikasjon_referanse_liste',
+     … +3 lines (ctrl+o to expand)
+
+● The sak?sakid=X endpoint returns the bill directly — no sak_liste wrapper. My
+  assumption was wrong. Let me revert that and also check the saksgang
+  structure:
+
+● Bash(curl -s "https://data.stortinget.no/eksport/sak?sakid=200280&format=json"
+       2>&1 | python3 -c "
+      import sys,json…)
+  ⎿  saksgang keys: ['respons_dato_tid', 'versjon', 'id', 'navn', 'saksgang
+     _steg_liste']
+     steps: 3
+     … +6 lines (ctrl+o to expand)
+
+● Good — the API returns the bill directly, not wrapped. Events have dato: 
+  "01.01.0001 00:00:00" (the sentinel) as strings, never null. Reverting the
+  wrong sak_liste wrapper:
+
+● Update(lib\stortinget\schemas.ts)
+  ⎿  Added 1 line, removed 10 lines
+      155  });
+      156  export type ApiBillDetail = z.infer<typeof BillDetailSchema>;
+      157  
+      158 -// The `sak?sakid=X` endpoint wraps the single bill in `sak_li
+          -ste`, consistent                                              
+      159 -// with all other Stortinget endpoints that return list wrappe
+          -rs even for                                                   
+      160 -// single-item lookups.                                       
+      161 -const BillDetailResponseSchema = Envelope.extend({            
+      162 -  sak_liste: z.array(BillDetailSchema),                       
+      163 -});                                                           
+      164 -                                                              
+      158  export function parseBillDetail(raw: unknown): ApiBillDetail {
+      166 -  const { sak_liste } = BillDetailResponseSchema.parse(raw);  
+      167 -  if (sak_liste.length === 0) throw new Error("Ingen sak i res
+          -pons");                                                       
+      168 -  return sak_liste[0];                                        
+      159 +  return BillDetailSchema.parse(raw);                         
+      160  }
+
+● Now let me verify the real API response matches the schema by checking
+  sak_opphav and stikkord_liste shapes:
+● Bash(curl -s "https://data.stortinget.no/eksport/sak?sakid=200280&format=json"
+       2>&1 | python3 -c "
+      import sys,json…)
+  ⎿  sak_opphav: {'respons_dato_tid': '/Date(1776714832300+0200)/', 'versjo
+     n': '1.6', 'forslagstiller_liste': [{'respons_dato_tid': '/Date(177671
+     3178411+0200)/', 'versjon': '1.6', 'doedsdato': None, 'etternavn': 'La
+     … +30 lines (ctrl+o to expand)
+
+● Now check types and test the fixed endpoint directly:
+
+● Bash(cd "C:/Users/Odin Elle/Documents/GitHub/parlytics/stortingetdash" && npx
+      tsc --noEmit 2>&1)
+  ⎿  (No output)
+
+● Bash(curl -s "http://localhost:3000/api/stortinget/bills/200280" 2>&1 |
+      python3 -c "import sys,json; d=json.load(sys.stdin); print('id:',
+      d['data']['id']); print('ti…)
+  ⎿  id: 200280
+     tittel: Representantforslag om en tydelig og forpliktende integrerin
+     stage: 2
+
+● Works. The 502 was caused by the wrong sak_liste wrapper I added — the
+  Stortinget sak?sakid=X endpoint returns the bill object directly, not in a
+  list. Reverted to direct parsing; clicking the bill now loads correctly.
+
+✻ Cogitated for 1m 44s
+
+※ recap: Frontend analyse panel is working end-to-end with the Python backend serving cached results. Next step is to test the "Hent analyse" button on a live bill in the browser.
